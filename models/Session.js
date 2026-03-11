@@ -1,0 +1,18 @@
+import mongoose from 'mongoose';
+
+const sessionSchema = new mongoose.Schema(
+  {
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
+    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
+    startTime: { type: Date, required: true },
+    endTime: { type: Date },
+    capacity: { type: Number, default: 12 },
+    location: { type: String },
+    status: { type: String, enum: ['scheduled', 'cancelled'], default: 'scheduled' },
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+  },
+  { timestamps: true }
+);
+
+const Session = mongoose.model('Session', sessionSchema);
+export default Session;
