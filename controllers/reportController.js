@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
 import Trainer from '../models/Trainer.js';
 import Session from '../models/Session.js';

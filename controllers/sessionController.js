@@ -1,6 +1,7 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
+import Booking from '../models/Booking.js';
 import { signQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -29,7 +30,22 @@ export const getSessions = asyncHandler(async (req, res) => {
   const sessions = await Session.find(filter)
     .populate('classId', 'title ageGroup duration price')
     .populate('trainerId', 'name');
-  res.json(sessions);
+
+  // Add bookingsCount to each session
+  const sessionsWithCounts = await Promise.all(
+    sessions.map(async (session) => {
+      const bookingsCount = await Booking.countDocuments({
+        sessionId: session._id,
+        status: { $ne: 'cancelled' }
+      });
+      return {
+        ...session.toObject(),
+        bookingsCount
+      };
+    })
+  );
+
+  res.json(sessionsWithCounts);
 });
 
 export const getSessionById = asyncHandler(async (req, res) => {
