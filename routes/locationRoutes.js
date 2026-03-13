@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import {
   getLocations,
   getLocationById,
@@ -7,11 +7,11 @@ import {
   deleteLocation,
   getMyLocation
 } from '../controllers/locationController.js';
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import { protect, adminOnly, optionalProtect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-router.get('/', getLocations);
+router.get('/', optionalProtect, getLocations);
 router.get('/me', protect, getMyLocation);
 router.get('/:id', getLocationById);
 router.post('/', protect, adminOnly, createLocation);

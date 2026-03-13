@@ -1,4 +1,4 @@
-﻿import mongoose from 'mongoose';
+import mongoose from 'mongoose';
 
 const locationSchema = new mongoose.Schema(
   {
@@ -17,8 +17,6 @@ const locationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-locationSchema.index({ slug: 1 }, { unique: true });
 
 const Location = mongoose.model('Location', locationSchema);
 export default Location;
