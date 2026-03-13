@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
@@ -6,7 +6,6 @@ import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({ userId: req.user._id })
-    .populate('childId', 'name age')
     .populate('classId', 'title price')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .sort({ createdAt: -1 });
@@ -18,7 +17,6 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   const filter = locationId ? { locationId } : {};
   const bookings = await Booking.find(filter)
     .populate('userId', 'name email')
-    .populate('childId', 'name age')
     .populate('classId', 'title price')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .sort({ createdAt: -1 });
@@ -26,61 +24,75 @@ export const getAllBookings = asyncHandler(async (req, res) => {
 });
 
 export const createBooking = asyncHandler(async (req, res) => {
-  const { childId, classId, date, sessionId } = req.body;
-  if (!childId || (!classId && !sessionId)) {
+  const { participants, classId, date, sessionId, paymentMethod, paymentStatus } = req.body;
+  
+  if (!participants || !Array.isArray(participants) || participants.length === 0) {
     res.status(400);
-    throw new Error('childId and classId or sessionId are required');
+    throw new Error('Participants array is required');
+  }
+
+  if (!classId && !sessionId) {
+    res.status(400);
+    throw new Error('classId or sessionId is required');
   }
 
   let resolvedClassId = classId;
   let resolvedDate = date;
   let resolvedSessionId = sessionId;
   let resolvedLocationId = null;
+  let session = null;
 
   if (sessionId) {
-    const session = await Session.findById(sessionId);
+    session = await Session.findById(sessionId);
     if (!session) {
       res.status(404);
       throw new Error('Session not found');
     }
     resolvedClassId = session.classId;
     resolvedDate = session.startTime;
-    resolvedSessionId = session._id;
     resolvedLocationId = session.locationId;
 
-    if (session.capacity) {
-      const bookedCount = await Booking.countDocuments({ sessionId: sessionId, status: { $ne: 'cancelled' } });
-      if (bookedCount >= session.capacity) {
-        res.status(400);
-        throw new Error('Session is full');
-      }
-    }
-  } else {
-    if (!resolvedDate) {
+    // Capacity Check
+    const remainingCapacity = session.capacity - session.bookedParticipants;
+    if (participants.length > remainingCapacity) {
       res.status(400);
-      throw new Error('date is required when booking without a session');
+      throw new Error(`Only ${remainingCapacity} spots remaining in this session`);
     }
-    const classItem = await ClassModel.findById(resolvedClassId);
-    if (!classItem) {
-      res.status(404);
-      throw new Error('Class not found');
-    }
-    resolvedLocationId = classItem.locationId;
   }
 
-  if (!resolvedLocationId) {
-    res.status(400);
-    throw new Error('Location is required');
+  const classItem = await ClassModel.findById(resolvedClassId);
+  if (!classItem) {
+    res.status(404);
+    throw new Error('Class not found');
   }
+  
+  if (!resolvedLocationId) resolvedLocationId = classItem.locationId;
+  if (!resolvedDate) {
+    res.status(400);
+    throw new Error('Date is required');
+  }
+
+  // Calculate Total Amount
+  const totalAmount = (classItem.price || 0) * participants.length;
 
   const created = await Booking.create({
     userId: req.user._id,
-    childId,
+    participants,
     classId: resolvedClassId,
     sessionId: resolvedSessionId,
     date: resolvedDate,
-    locationId: resolvedLocationId
+    totalAmount,
+    locationId: resolvedLocationId,
+    paymentMethod,
+    paymentStatus
   });
+
+  // Update session occupancy if applicable
+  if (session) {
+    session.bookedParticipants += participants.length;
+    await session.save();
+  }
+
   res.status(201).json(created);
 });
 

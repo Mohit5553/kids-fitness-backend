@@ -6,12 +6,12 @@ import { signQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getSessions = asyncHandler(async (req, res) => {
-  const { start, end, classId, trainerId } = req.query;
+  const { start, end, classId, trainerId, locationId: queryLocationId } = req.query;
   const filter = {};
 
-  const locationId = resolveReadLocationId(req);
+  const locationId = queryLocationId || resolveReadLocationId(req);
   if (locationId) {
-    filter.$or = [{ locationId }, { locationId: null }];
+    filter.locationId = locationId;
   }
 
   if (start || end) {
