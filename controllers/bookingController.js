@@ -1,4 +1,4 @@
-import asyncHandler from 'express-async-handler';
+﻿import asyncHandler from 'express-async-handler';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
@@ -66,10 +66,6 @@ export const createBooking = asyncHandler(async (req, res) => {
       throw new Error('Class not found');
     }
     resolvedLocationId = classItem.locationId;
-  }
-
-  if (!resolvedLocationId) {
-    resolvedLocationId = resolveReadLocationId(req);
   }
 
   if (!resolvedLocationId) {

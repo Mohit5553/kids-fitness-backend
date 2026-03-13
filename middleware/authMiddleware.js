@@ -33,18 +33,3 @@ export const adminOnly = (req, res, next) => {
     throw new Error('Admin access required');
   }
 };
-
-export const optionalProtect = asyncHandler(async (req, res, next) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.split(' ')[1] : null;
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = await User.findById(decoded.id).select('-password');
-    } catch (err) {
-      console.error('Optional protect token error:', err.message);
-    }
-  }
-  next();
-});

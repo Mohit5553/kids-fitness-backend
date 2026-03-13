@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import path from 'path';
 
 import connectDB from './config/db.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -23,7 +22,6 @@ import attendanceRoutes from './routes/attendanceRoutes.js';
 import membershipRoutes from './routes/membershipRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import trialRoutes from './routes/trialRoutes.js';
-import uploadRoutes from './routes/uploadRoutes.js';
 
 dotenv.config();
 
@@ -32,14 +30,9 @@ const app = express();
 app.use(express.json());
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }
-  })
-);
+app.use(helmet());
 app.use(morgan('dev'));
 app.use(locationMiddleware);
-app.use('/uploads', express.static(path.join(path.resolve(), 'uploads')));
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'kids-fitness-backend' });
@@ -59,8 +52,6 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/memberships', membershipRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/trials', trialRoutes);
-app.use('/api/uploads', uploadRoutes);
-app.use('/api/upload', uploadRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

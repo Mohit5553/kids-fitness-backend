@@ -1,12 +1,9 @@
-import asyncHandler from 'express-async-handler';
+﻿import asyncHandler from 'express-async-handler';
 import Location from '../models/Location.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getLocations = asyncHandler(async (req, res) => {
-  const showAll = req.query.all === 'true' || req.query.all === '1';
-  const query = showAll ? {} : { status: 'active' };
-  
-  const locations = await Location.find(query).sort({ sortOrder: 1, name: 1 });
+  const locations = await Location.find({ status: 'active' }).sort({ sortOrder: 1, name: 1 });
   res.json(locations);
 });
 

@@ -1,4 +1,4 @@
-import asyncHandler from 'express-async-handler';
+﻿import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 

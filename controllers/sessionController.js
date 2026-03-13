@@ -1,4 +1,4 @@
-import asyncHandler from 'express-async-handler';
+﻿import asyncHandler from 'express-async-handler';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
 import { signQrToken } from '../utils/qrToken.js';
