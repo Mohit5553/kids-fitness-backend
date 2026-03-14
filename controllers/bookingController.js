@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
+import SalesOrder from '../models/SalesOrder.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
@@ -24,8 +25,13 @@ export const getAllBookings = asyncHandler(async (req, res) => {
 });
 
 export const createBooking = asyncHandler(async (req, res) => {
-  const { participants, classId, date, sessionId, paymentMethod, paymentStatus } = req.body;
+  const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails } = req.body;
   
+  if (!req.user && (!guestDetails || !guestDetails.name || !guestDetails.email)) {
+    res.status(400);
+    throw new Error('Must be logged in or provide guest details');
+  }
+
   if (!participants || !Array.isArray(participants) || participants.length === 0) {
     res.status(400);
     throw new Error('Participants array is required');
@@ -75,8 +81,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   // Calculate Total Amount
   const totalAmount = (classItem.price || 0) * participants.length;
 
-  const created = await Booking.create({
-    userId: req.user._id,
+  const bookingData = {
     participants,
     classId: resolvedClassId,
     sessionId: resolvedSessionId,
@@ -85,7 +90,31 @@ export const createBooking = asyncHandler(async (req, res) => {
     locationId: resolvedLocationId,
     paymentMethod,
     paymentStatus
-  });
+  };
+
+  if (req.user) {
+    bookingData.userId = req.user._id;
+  } else {
+    bookingData.guestDetails = guestDetails;
+  }
+
+  const created = await Booking.create(bookingData);
+
+  // If paying at center, generate a SalesOrder
+  if (paymentMethod === 'center') {
+    const orderData = {
+      bookingId: created._id,
+      amount: totalAmount,
+      status: 'pending',
+      locationId: resolvedLocationId
+    };
+    if (req.user) {
+      orderData.userId = req.user._id;
+    } else {
+      orderData.guestDetails = guestDetails;
+    }
+    await SalesOrder.create(orderData);
+  }
 
   // Update session occupancy if applicable
   if (session) {
