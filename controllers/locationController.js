@@ -1,9 +1,23 @@
 import asyncHandler from 'express-async-handler';
 import Location from '../models/Location.js';
+import ClassModel from '../models/Class.js';
+import Session from '../models/Session.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getLocations = asyncHandler(async (req, res) => {
   const query = req.query.all === 'true' ? {} : { status: 'active' };
+
+  if (req.query.activeClasses === 'true') {
+    // Find locations that have either classes assigned or sessions scheduled
+    const classLocations = await ClassModel.distinct('locationId');
+    const sessionLocations = await Session.distinct('locationId');
+    
+    // Combine and deduplicate
+    const activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id ? id.toString() : null).filter(Boolean))];
+    
+    query._id = { $in: activeLocationIds };
+  }
+
   const locations = await Location.find(query).sort({ sortOrder: 1, name: 1 });
   res.json(locations);
 });
