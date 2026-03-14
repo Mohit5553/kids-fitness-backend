@@ -3,12 +3,22 @@ import mongoose from 'mongoose';
 const bookingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child', required: true },
+    participants: [
+      {
+        name: { type: String, required: true },
+        age: { type: Number, required: true },
+        gender: { type: String },
+        childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' }
+      }
+    ],
     classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session' },
     date: { type: Date, required: true },
+    totalAmount: { type: Number, required: true },
     status: { type: String, enum: ['pending', 'confirmed', 'cancelled'], default: 'pending' },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    paymentMethod: { type: String, enum: ['online', 'center'], default: 'center' },
+    paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' }
   },
   { timestamps: true }
 );

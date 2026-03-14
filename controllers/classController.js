@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -6,7 +6,7 @@ export const getClasses = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
   const classes = await ClassModel.find(filter)
-    .populate('trainerId', 'name')
+    .populate('availableTrainers', 'name status locationId')
     .sort({ createdAt: -1 });
   res.json(classes);
 });
@@ -14,7 +14,7 @@ export const getClasses = asyncHandler(async (req, res) => {
 export const getClassById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
-  const classItem = await ClassModel.findOne(filter).populate('trainerId', 'name');
+  const classItem = await ClassModel.findOne(filter).populate('availableTrainers', 'name status locationId');
   if (!classItem) {
     res.status(404);
     throw new Error('Class not found');
@@ -23,7 +23,7 @@ export const getClassById = asyncHandler(async (req, res) => {
 });
 
 export const createClass = asyncHandler(async (req, res) => {
-  const { title, description, ageGroup, duration, trainer, trainerId, price, capacity } = req.body;
+  const { title, description, ageGroup, duration, availableTrainers, price, capacity } = req.body;
   if (!title || price == null) {
     res.status(400);
     throw new Error('Title and price are required');
@@ -38,8 +38,7 @@ export const createClass = asyncHandler(async (req, res) => {
     description,
     ageGroup,
     duration,
-    trainer,
-    trainerId,
+    availableTrainers,
     price,
     capacity,
     locationId

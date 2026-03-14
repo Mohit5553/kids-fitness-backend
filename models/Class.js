@@ -6,8 +6,7 @@ const classSchema = new mongoose.Schema(
     description: { type: String },
     ageGroup: { type: String },
     duration: { type: String },
-    trainer: { type: String },
-    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
+    availableTrainers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' }],
     price: { type: Number, required: true },
     capacity: { type: Number, default: 12 },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }

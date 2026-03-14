@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
 import Trainer from '../models/Trainer.js';
 import Session from '../models/Session.js';
@@ -6,6 +6,7 @@ import Booking from '../models/Booking.js';
 import User from '../models/User.js';
 import Membership from '../models/Membership.js';
 import Payment from '../models/Payment.js';
+import Child from '../models/Child.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
@@ -63,5 +64,26 @@ export const getSummary = asyncHandler(async (req, res) => {
       totalAmount: paymentSummary.total,
       count: paymentSummary.count
     }
+  });
+});
+
+export const getParentSummary = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const now = new Date();
+
+  const [childrenCount, upcomingClassesCount, latestMembership] = await Promise.all([
+    Child.countDocuments({ parentId: userId }),
+    Booking.countDocuments({ 
+      userId, 
+      status: 'confirmed', 
+      date: { $gte: now } 
+    }),
+    Membership.findOne({ userId }).sort({ createdAt: -1 })
+  ]);
+
+  res.json({
+    childrenCount,
+    upcomingClassesCount,
+    membershipStatus: latestMembership ? (latestMembership.status.charAt(0).toUpperCase() + latestMembership.status.slice(1)) : 'None'
   });
 });
