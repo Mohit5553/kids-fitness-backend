@@ -23,7 +23,11 @@ const bookingSchema = new mongoose.Schema(
     status: { type: String, enum: ['pending', 'confirmed', 'cancelled'], default: 'pending' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     paymentMethod: { type: String, enum: ['online', 'center'], default: 'center' },
-    paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' }
+    paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
+    paymentReference: { type: String },
+    paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
+    paymentDate: { type: Date },
+    refundStatus: { type: String, enum: ['none', 'requested', 'refunded', 'declined'], default: 'none' }
   },
   { timestamps: true }
 );

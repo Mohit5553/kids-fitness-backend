@@ -81,6 +81,30 @@ export const createBooking = asyncHandler(async (req, res) => {
   // Calculate Total Amount
   const totalAmount = (classItem.price || 0) * participants.length;
 
+  // Age and Gender Validation
+  for (const p of participants) {
+    if (!p.name || !p.age || !p.gender) {
+      res.status(400);
+      throw new Error(`Please provide complete details for all participants`);
+    }
+
+    const pAge = Number(p.age);
+    if (classItem.minAge !== undefined && classItem.minAge !== null && pAge < classItem.minAge) {
+      res.status(400);
+      throw new Error(`${p.name} is too young for this class. Minimum age: ${classItem.minAge}`);
+    }
+    if (classItem.maxAge !== undefined && classItem.maxAge !== null && pAge > classItem.maxAge) {
+      res.status(400);
+      throw new Error(`${p.name} is too old for this class. Maximum age: ${classItem.maxAge}`);
+    }
+    if (classItem.genderRestriction && classItem.genderRestriction !== 'any') {
+      if (p.gender.toLowerCase() !== classItem.genderRestriction.toLowerCase()) {
+        res.status(400);
+        throw new Error(`${p.name}'s gender does not match the class restriction: ${classItem.genderRestriction}`);
+      }
+    }
+  }
+
   const bookingData = {
     participants,
     classId: resolvedClassId,
@@ -138,6 +162,57 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
   booking.status = req.body.status || booking.status;
   const saved = await booking.save();
   res.json(saved);
+});
+
+export const requestRefund = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) {
+    res.status(404);
+    throw new Error('Booking not found');
+  }
+
+  if (booking.userId.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error('Not authorized');
+  }
+
+  if (booking.status !== 'confirmed' || booking.paymentStatus !== 'completed') {
+    res.status(400);
+    throw new Error('Only confirmed and paid bookings can be refunded');
+  }
+
+  if (!booking.paymentDate) {
+    res.status(400);
+    throw new Error('Payment date not found');
+  }
+
+  const now = new Date();
+  const paymentDate = new Date(booking.paymentDate);
+
+  // Check if it's the same day
+  const isSameDay = 
+    now.getFullYear() === paymentDate.getFullYear() &&
+    now.getMonth() === paymentDate.getMonth() &&
+    now.getDate() === paymentDate.getDate();
+
+  if (!isSameDay) {
+    res.status(400);
+    throw new Error('Refund must be requested on the same day as the transaction');
+  }
+
+  // Check if it's within 1 hour
+  const diffInMs = now.getTime() - paymentDate.getTime();
+  const diffInHours = diffInMs / (1000 * 60 * 60);
+
+  if (diffInHours > 1) {
+    res.status(400);
+    throw new Error('Refund must be requested within one hour of the transaction');
+  }
+
+  booking.refundStatus = 'requested';
+  await booking.save();
+
+  res.json({ message: 'Refund request submitted successfully' });
 });
 
 export const deleteBooking = asyncHandler(async (req, res) => {
