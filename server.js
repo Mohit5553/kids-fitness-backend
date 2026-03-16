@@ -23,6 +23,7 @@ import membershipRoutes from './routes/membershipRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import trialRoutes from './routes/trialRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
+import specialtyRoutes from './routes/specialtyRoutes.js';
 import path from 'path';
 
 dotenv.config();
@@ -60,6 +61,7 @@ app.use('/api/memberships', membershipRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/trials', trialRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/specialties', specialtyRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
