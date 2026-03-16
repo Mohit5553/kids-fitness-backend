@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Payment from '../models/Payment.js';
 import Booking from '../models/Booking.js';
 import ClassModel from '../models/Class.js';
@@ -95,6 +95,10 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
   });
 
   booking.status = 'confirmed';
+  booking.paymentStatus = 'completed';
+  booking.paymentReference = reference;
+  booking.paymentId = created._id;
+  booking.paymentDate = new Date();
   await booking.save();
 
   res.status(201).json(created);
