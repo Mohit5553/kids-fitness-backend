@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 const bookingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    bookingNumber: { type: String, unique: true },
     guestDetails: {
       name: { type: String },
       email: { type: String },
@@ -13,6 +14,7 @@ const bookingSchema = new mongoose.Schema(
         name: { type: String, required: true },
         age: { type: Number, required: true },
         gender: { type: String },
+        relation: { type: String },
         childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' }
       }
     ],
@@ -27,7 +29,8 @@ const bookingSchema = new mongoose.Schema(
     paymentReference: { type: String },
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     paymentDate: { type: Date },
-    refundStatus: { type: String, enum: ['none', 'requested', 'refunded', 'declined'], default: 'none' }
+    refundStatus: { type: String, enum: ['none', 'requested', 'refunded', 'declined'], default: 'none' },
+    refundRejectionReason: { type: String }
   },
   { timestamps: true }
 );

@@ -1,8 +1,16 @@
-import express from 'express';
 import dotenv from 'dotenv';
+dotenv.config();
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL ERROR: JWT_SECRET is not defined in .env file!');
+  process.exit(1);
+}
+console.log('JWT_SECRET verified and loaded.');
+
+import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
 
 import connectDB from './config/db.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -24,9 +32,6 @@ import reportRoutes from './routes/reportRoutes.js';
 import trialRoutes from './routes/trialRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import specialtyRoutes from './routes/specialtyRoutes.js';
-import path from 'path';
-
-dotenv.config();
 
 const app = express();
 

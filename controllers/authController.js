@@ -1,8 +1,9 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
+import { linkUserBookings } from './bookingController.js';
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -29,6 +30,9 @@ export const registerUser = asyncHandler(async (req, res) => {
   const locationId = resolveWriteLocationId(req);
 
   const user = await User.create({ name, email, phone, password: hashed, locationId });
+  
+  // Link any guest bookings made with this email to the new account
+  await linkUserBookings(user);
 
   res.status(201).json({
     _id: user._id,
@@ -59,6 +63,9 @@ export const loginUser = asyncHandler(async (req, res) => {
     res.status(401);
     throw new Error('Invalid credentials');
   }
+
+  // Ensure any guest bookings made with this email are linked
+  await linkUserBookings(user);
 
   res.json({
     _id: user._id,
