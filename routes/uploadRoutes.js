@@ -17,14 +17,14 @@ const storage = multer.diskStorage({
 });
 
 function checkFileType(file, cb) {
-  const filetypes = /jpg|jpeg|png/;
+  // Broaden file types for debugging
+  const filetypes = /jpg|jpeg|png|webp|gif/;
   const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = filetypes.test(file.mimetype);
-
-  if (extname && mimetype) {
+  
+  if (extname) {
     return cb(null, true);
   } else {
-    cb('Images only!');
+    cb('Images only (jpg, jpeg, png, webp, gif)!');
   }
 }
 
@@ -38,14 +38,19 @@ const upload = multer({
 router.post('/', (req, res) => {
   upload.single('image')(req, res, function (err) {
     if (err instanceof multer.MulterError) {
+       console.error('Multer Error:', err.message);
        return res.status(400).json({ message: 'Multer error', error: err.message });
     } else if (err) {
-       return res.status(400).json({ message: 'Upload error', error: err });
+       console.error('Upload Failed Error Object:', err);
+       return res.status(400).json({ message: 'Upload failed', error: typeof err === 'string' ? err : err.message || 'Unknown error' });
     }
 
     if (!req.file) {
+      console.error('No file in request');
       return res.status(400).json({ message: 'Please upload a file' });
     }
+
+    console.log('File uploaded successfully:', req.file.path);
 
     res.send({
       message: 'Image uploaded',

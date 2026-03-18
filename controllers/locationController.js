@@ -8,12 +8,22 @@ export const getLocations = asyncHandler(async (req, res) => {
   const query = req.query.all === 'true' ? {} : { status: 'active' };
 
   if (req.query.activeClasses === 'true') {
-    // Find locations that have either classes assigned or sessions scheduled
-    const classLocations = await ClassModel.distinct('locationId');
-    const sessionLocations = await Session.distinct('locationId');
-    
-    // Combine and deduplicate
-    const activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id ? id.toString() : null).filter(Boolean))];
+    const { classId } = req.query;
+    let activeLocationIds;
+
+    if (classId) {
+      // Find locations specifically for this class
+      const classItem = await ClassModel.findById(classId);
+      const classLocations = classItem?.locationId ? [classItem.locationId] : [];
+      const sessionLocations = await Session.distinct('locationId', { classId });
+      
+      activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id?.toString()).filter(Boolean))];
+    } else {
+      // Find locations that have either classes assigned or sessions scheduled (general)
+      const classLocations = await ClassModel.distinct('locationId');
+      const sessionLocations = await Session.distinct('locationId');
+      activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id?.toString()).filter(Boolean))];
+    }
     
     query._id = { $in: activeLocationIds };
   }

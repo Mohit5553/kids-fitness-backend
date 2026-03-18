@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Trainer from '../models/Trainer.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -21,7 +21,7 @@ export const getTrainerById = asyncHandler(async (req, res) => {
 });
 
 export const createTrainer = asyncHandler(async (req, res) => {
-  const { name, bio, specialties, phone, email, avatarUrl, status } = req.body;
+  const { name, bio, specialties, phone, email, avatarUrl, gallery, status } = req.body;
   if (!name) {
     res.status(400);
     throw new Error('Name is required');
@@ -31,7 +31,7 @@ export const createTrainer = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Location is required');
   }
-  const created = await Trainer.create({ name, bio, specialties, phone, email, avatarUrl, status, locationId });
+  const created = await Trainer.create({ name, bio, specialties, phone, email, avatarUrl, gallery, status, locationId });
   res.status(201).json(created);
 });
 

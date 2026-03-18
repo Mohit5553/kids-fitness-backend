@@ -6,7 +6,12 @@ import SalesOrder from '../models/SalesOrder.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
-  const bookings = await Booking.find({ userId: req.user._id })
+  const bookings = await Booking.find({
+    $or: [
+      { userId: req.user._id },
+      { 'guestDetails.email': req.user.email }
+    ]
+  })
     .populate('classId', 'title price')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .sort({ createdAt: -1 });
@@ -105,7 +110,13 @@ export const createBooking = asyncHandler(async (req, res) => {
     }
   }
 
+  // Generate Booking Number (BK-YYMMDD-XXXX)
+  const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+  const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const bookingNumber = `BK-${dateStr}-${randomStr}`;
+
   const bookingData = {
+    bookingNumber,
     participants,
     classId: resolvedClassId,
     sessionId: resolvedSessionId,
@@ -113,7 +124,9 @@ export const createBooking = asyncHandler(async (req, res) => {
     totalAmount,
     locationId: resolvedLocationId,
     paymentMethod,
-    paymentStatus
+    paymentStatus,
+    paymentDate: paymentStatus === 'completed' ? new Date() : undefined,
+    status: paymentStatus === 'completed' ? 'confirmed' : 'pending'
   };
 
   if (req.user) {
@@ -176,43 +189,53 @@ export const requestRefund = asyncHandler(async (req, res) => {
     throw new Error('Not authorized');
   }
 
-  if (booking.status !== 'confirmed' || booking.paymentStatus !== 'completed') {
+  const isPaid = booking.paymentStatus === 'completed' || booking.status === 'confirmed';
+  if (!isPaid) {
     res.status(400);
-    throw new Error('Only confirmed and paid bookings can be refunded');
-  }
-
-  if (!booking.paymentDate) {
-    res.status(400);
-    throw new Error('Payment date not found');
+    throw new Error('Only paid or confirmed bookings can be refunded');
   }
 
   const now = new Date();
-  const paymentDate = new Date(booking.paymentDate);
+  const sessionDate = new Date(booking.date);
 
-  // Check if it's the same day
-  const isSameDay = 
-    now.getFullYear() === paymentDate.getFullYear() &&
-    now.getMonth() === paymentDate.getMonth() &&
-    now.getDate() === paymentDate.getDate();
-
-  if (!isSameDay) {
+  // Allow refund anytime BEFORE the session starts
+  if (now >= sessionDate) {
     res.status(400);
-    throw new Error('Refund must be requested on the same day as the transaction');
-  }
-
-  // Check if it's within 1 hour
-  const diffInMs = now.getTime() - paymentDate.getTime();
-  const diffInHours = diffInMs / (1000 * 60 * 60);
-
-  if (diffInHours > 1) {
-    res.status(400);
-    throw new Error('Refund must be requested within one hour of the transaction');
+    throw new Error('Refunds can only be requested before the session starts');
   }
 
   booking.refundStatus = 'requested';
   await booking.save();
 
   res.json({ message: 'Refund request submitted successfully' });
+});
+
+export const resolveRefundRequest = asyncHandler(async (req, res) => {
+  const { status, reason } = req.body;
+  const booking = await Booking.findById(req.params.id);
+
+  if (!booking) {
+    res.status(404);
+    throw new Error('Booking not found');
+  }
+
+  if (status === 'refunded') {
+    booking.refundStatus = 'refunded';
+    booking.status = 'cancelled';
+  } else if (status === 'declined') {
+    if (!reason) {
+      res.status(400);
+      throw new Error('Rejection reason is required');
+    }
+    booking.refundStatus = 'declined';
+    booking.refundRejectionReason = reason;
+  } else {
+    res.status(400);
+    throw new Error('Invalid status');
+  }
+
+  await booking.save();
+  res.json({ message: `Refund request ${status} successfully`, booking });
 });
 
 export const deleteBooking = asyncHandler(async (req, res) => {
@@ -228,3 +251,29 @@ export const deleteBooking = asyncHandler(async (req, res) => {
   await booking.deleteOne();
   res.json({ message: 'Booking removed' });
 });
+
+/**
+ * Links any existing guest bookings/orders to a user account based on email.
+ * This is called during registration and login.
+ */
+export const linkUserBookings = async (user) => {
+  if (!user || !user.email) return;
+  
+  try {
+    // 1. Link Bookings
+    const bookingResult = await Booking.updateMany(
+      { userId: { $exists: false }, 'guestDetails.email': user.email },
+      { $set: { userId: user._id } }
+    );
+    
+    // 2. Link SalesOrders
+    const orderResult = await SalesOrder.updateMany(
+      { userId: { $exists: false }, 'guestDetails.email': user.email },
+      { $set: { userId: user._id } }
+    );
+    
+    console.log(`Linked ${bookingResult.modifiedCount} bookings and ${orderResult.modifiedCount} orders for ${user.email}`);
+  } catch (error) {
+    console.error(`Error linking guest bookings for ${user.email}:`, error);
+  }
+};

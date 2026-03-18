@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Plan from '../models/Plan.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -11,7 +11,7 @@ export const getPlans = asyncHandler(async (req, res) => {
 });
 
 export const createPlan = asyncHandler(async (req, res) => {
-  const { name, price, validity, benefits, type, classesIncluded, durationWeeks, tagline, isFeatured } = req.body;
+  const { name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured } = req.body;
   if (!name || price == null) {
     res.status(400);
     throw new Error('Name and price are required');
@@ -22,7 +22,7 @@ export const createPlan = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Location is required');
   }
-  const created = await Plan.create({ name, price, validity, benefits, type, classesIncluded, durationWeeks, tagline, isFeatured, locationId });
+  const created = await Plan.create({ name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, locationId });
   res.status(201).json(created);
 });
 

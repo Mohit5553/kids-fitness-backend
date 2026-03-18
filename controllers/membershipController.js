@@ -1,13 +1,23 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Membership from '../models/Membership.js';
 import Plan from '../models/Plan.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 const addWeeks = (date, weeks) => new Date(date.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
+const addMonths = (date, months) => {
+  const newDate = new Date(date);
+  newDate.setMonth(newDate.getMonth() + months);
+  return newDate;
+};
+const addYears = (date, years) => {
+  const newDate = new Date(date);
+  newDate.setFullYear(newDate.getFullYear() + years);
+  return newDate;
+};
 
 export const getMyMemberships = asyncHandler(async (req, res) => {
   const memberships = await Membership.find({ userId: req.user._id })
-    .populate('planId', 'name price validity type classesIncluded durationWeeks')
+    .populate('planId', 'name price validity type classesIncluded durationWeeks billingCycle')
     .sort({ createdAt: -1 });
   res.json(memberships);
 });
@@ -17,7 +27,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
   const filter = locationId ? { locationId } : {};
   const memberships = await Membership.find(filter)
     .populate('userId', 'name email')
-    .populate('planId', 'name price validity type classesIncluded durationWeeks')
+    .populate('planId', 'name price validity type classesIncluded durationWeeks billingCycle')
     .sort({ createdAt: -1 });
   res.json(memberships);
 });
@@ -36,7 +46,20 @@ export const createMembership = asyncHandler(async (req, res) => {
   }
 
   const startDate = new Date();
-  const endDate = plan.durationWeeks ? addWeeks(startDate, plan.durationWeeks) : undefined;
+  let endDate;
+
+  if (plan.type === 'subscription' && plan.billingCycle && plan.billingCycle !== 'none') {
+    if (plan.billingCycle === 'weekly') {
+      endDate = addWeeks(startDate, 1);
+    } else if (plan.billingCycle === 'monthly') {
+      endDate = addMonths(startDate, 1);
+    } else if (plan.billingCycle === 'yearly') {
+      endDate = addYears(startDate, 1);
+    }
+  } else if (plan.durationWeeks) {
+    endDate = addWeeks(startDate, plan.durationWeeks);
+  }
+
   const classesRemaining = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined);
 
   const created = await Membership.create({
