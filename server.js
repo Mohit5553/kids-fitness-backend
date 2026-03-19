@@ -48,7 +48,7 @@ const __dirname = path.resolve();
 app.use('/uploads', express.static(path.join(__dirname, '/uploads')));
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'kids-fitness-backend' });
+  res.json({ status: 'ok', service: 'jts-booking-backend' });
 });
 
 app.use('/api/auth', authRoutes);
