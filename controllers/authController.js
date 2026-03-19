@@ -12,7 +12,14 @@ const generateToken = (id) => {
 };
 
 export const registerUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, password } = req.body;
+  const { 
+    name, email, phone, password, 
+    firstName, lastName, instagram, gender, 
+    relationship, birthDate, address, city, 
+    country, avatarUrl, locationId: preferredLocation,
+    children // Array of child objects
+  } = req.body;
+
   if (!name || !email || !password) {
     res.status(400);
     throw new Error('Name, email, and password are required');
@@ -27,20 +34,61 @@ export const registerUser = asyncHandler(async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   const hashed = await bcrypt.hash(password, salt);
 
-  const locationId = resolveWriteLocationId(req);
+  const locationId = preferredLocation || resolveWriteLocationId(req);
 
-  const user = await User.create({ name, email, phone, password: hashed, locationId });
+  const user = await User.create({ 
+    name, 
+    firstName, 
+    lastName, 
+    email, 
+    phone, 
+    password: hashed, 
+    locationId,
+    instagram,
+    gender,
+    relationship,
+    birthDate,
+    address,
+    city,
+    country,
+    avatarUrl
+  });
   
+  // Create children if provided
+  if (children && Array.isArray(children)) {
+    for (const childData of children) {
+      if (childData.firstName) {
+        const age = childData.age || (childData.birthDate ? Math.floor((new Date() - new Date(childData.birthDate)) / (365.25 * 24 * 60 * 60 * 1000)) : 0);
+        await Child.create({
+          parentId: user._id,
+          name: `${childData.firstName} ${childData.lastName || ''}`.trim(),
+          firstName: childData.firstName,
+          lastName: childData.lastName,
+          birthDate: childData.birthDate,
+          age: age,
+          gender: childData.gender || 'other',
+          photoUrl: childData.photoUrl,
+          school: childData.school,
+          medicalCondition: childData.medicalCondition,
+          locationId
+        });
+      }
+    }
+  }
+
   // Link any guest bookings made with this email to the new account
   await linkUserBookings(user);
 
   res.status(201).json({
     _id: user._id,
     name: user.name,
+    firstName: user.firstName,
+    lastName: user.lastName,
     email: user.email,
     phone: user.phone,
     role: user.role,
     locationId: user.locationId,
+    avatarUrl: user.avatarUrl,
     token: generateToken(user._id)
   });
 });
