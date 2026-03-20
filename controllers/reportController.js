@@ -7,6 +7,8 @@ import User from '../models/User.js';
 import Membership from '../models/Membership.js';
 import Payment from '../models/Payment.js';
 import Child from '../models/Child.js';
+import Plan from '../models/Plan.js';
+import Trial from '../models/Trial.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
@@ -86,4 +88,78 @@ export const getParentSummary = asyncHandler(async (req, res) => {
     upcomingClassesCount,
     membershipStatus: latestMembership ? (latestMembership.status.charAt(0).toUpperCase() + latestMembership.status.slice(1)) : 'None'
   });
+});
+
+// @desc    Get detailed reports
+// @route   GET /api/reports/:type
+// @access  Private/Admin
+export const getDetailedReport = asyncHandler(async (req, res) => {
+  const { type } = req.params;
+  const { startDate, endDate, locationId: queryLocationId } = req.query;
+  const locationId = queryLocationId || resolveReadLocationId(req);
+  
+  const filter = {};
+  if (locationId) filter.locationId = locationId;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.createdAt = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.createdAt = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.createdAt = { $lte: new Date(endDate) };
+  }
+
+  let data = [];
+
+  switch (type) {
+    case 'classes':
+      data = await ClassModel.find(filter).populate('availableTrainers', 'name').lean();
+      // Enrich with session/booking counts if needed, but for simplicity we'll return basic data first
+      break;
+
+    case 'trainers':
+      data = await Trainer.find(filter).lean();
+      break;
+
+    case 'pricing':
+      data = await Plan.find(filter).lean();
+      break;
+
+    case 'bookings':
+      // For bookings, we might want to filter by 'date' instead of 'createdAt' for the actual class date
+      const bookingDateFilter = {};
+      if (startDate && endDate) {
+        bookingDateFilter.date = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        };
+      }
+      data = await Booking.find({ ...filter, ...bookingDateFilter })
+        .populate('userId', 'name email phone')
+        .populate('classId', 'title')
+        .populate('locationId', 'name')
+        .lean();
+      break;
+
+    case 'trials':
+      data = await Trial.find({ ...filter, ...dateFilter }).lean();
+      break;
+
+    case 'payments':
+      data = await Payment.find({ ...filter, ...dateFilter })
+        .populate('userId', 'name email')
+        .populate('locationId', 'name')
+        .lean();
+      break;
+
+    default:
+      res.status(400);
+      throw new Error('Invalid report type');
+  }
+
+  res.json(data);
 });
