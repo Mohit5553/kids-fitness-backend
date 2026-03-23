@@ -117,16 +117,16 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
 
   switch (type) {
     case 'classes':
-      data = await ClassModel.find(filter).populate('availableTrainers', 'name').lean();
+      data = await ClassModel.find(filter).populate('availableTrainers', 'name').sort({ createdAt: -1 }).lean();
       // Enrich with session/booking counts if needed, but for simplicity we'll return basic data first
       break;
 
     case 'trainers':
-      data = await Trainer.find(filter).lean();
+      data = await Trainer.find(filter).sort({ createdAt: -1 }).lean();
       break;
 
     case 'pricing':
-      data = await Plan.find(filter).lean();
+      data = await Plan.find(filter).sort({ createdAt: -1 }).lean();
       break;
 
     case 'bookings':
@@ -142,17 +142,26 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .populate('userId', 'name email phone')
         .populate('classId', 'title')
         .populate('locationId', 'name')
+        .sort({ date: -1 })
         .lean();
       break;
 
     case 'trials':
-      data = await Trial.find({ ...filter, ...dateFilter }).lean();
+      data = await Trial.find({ ...filter, ...dateFilter }).sort({ createdAt: -1 }).lean();
       break;
 
     case 'payments':
       data = await Payment.find({ ...filter, ...dateFilter })
         .populate('userId', 'name email')
         .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
+      break;
+
+    case 'users':
+      // Fetch only regular users (parents), not admins
+      data = await User.find({ ...filter, ...dateFilter, role: 'user' })
+        .sort({ createdAt: -1 })
         .lean();
       break;
 

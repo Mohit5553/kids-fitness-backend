@@ -29,7 +29,8 @@ export const getSessions = asyncHandler(async (req, res) => {
 
   const sessions = await Session.find(filter)
     .populate('classId', 'title ageGroup duration price')
-    .populate('trainerId', 'name');
+    .populate('trainerId', 'name')
+    .sort({ createdAt: -1 });
 
   // Add bookingsCount to each session
   const sessionsWithCounts = await Promise.all(
