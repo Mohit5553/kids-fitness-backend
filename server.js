@@ -11,6 +11,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 import connectDB from './config/db.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -34,9 +36,34 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import specialtyRoutes from './routes/specialtyRoutes.js';
 
 const app = express();
+const httpServer = createServer(app);
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: corsOrigin,
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
+
+// Make io accessible in controllers
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+  
+  socket.on('join_admin', () => {
+    socket.join('admin_room');
+    console.log('Client joined admin room:', socket.id);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
 
 app.use(express.json());
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(helmet({
   crossOriginResourcePolicy: false,
@@ -75,7 +102,7 @@ const PORT = process.env.PORT || 5000;
 
 connectDB()
   .then(() => {
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
   })

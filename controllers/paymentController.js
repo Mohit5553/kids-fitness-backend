@@ -4,8 +4,10 @@ import Booking from '../models/Booking.js';
 import ClassModel from '../models/Class.js';
 import Plan from '../models/Plan.js';
 import Membership from '../models/Membership.js';
+import User from '../models/User.js';
 import { toCsv } from '../utils/csv.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { sendPaymentConfirmationEmail } from '../utils/mailer.js';
 
 export const getMyPayments = asyncHandler(async (req, res) => {
   const payments = await Payment.find({ userId: req.user._id })
@@ -61,6 +63,13 @@ export const createPayment = asyncHandler(async (req, res) => {
     last4,
     locationId
   });
+
+  // Notify User
+  const userData = await User.findById(created.userId);
+  if (userData) {
+    sendPaymentConfirmationEmail(created, userData).catch(err => console.error('Payment confirmation email failed:', err.message));
+  }
+
   res.status(201).json(created);
 });
 
@@ -99,7 +108,14 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
   booking.paymentReference = reference;
   booking.paymentId = created._id;
   booking.paymentDate = new Date();
+  booking.paymentDate = new Date();
   await booking.save();
+
+  // Notify User
+  const userData = await User.findById(created.userId);
+  if (userData) {
+    sendPaymentConfirmationEmail(created, userData, `your booking for ${classItem.title}`).catch(err => console.error('Booking payment email failed:', err.message));
+  }
 
   res.status(201).json(created);
 });

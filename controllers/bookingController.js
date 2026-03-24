@@ -3,7 +3,10 @@ import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
 import SalesOrder from '../models/SalesOrder.js';
+import Location from '../models/Location.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { sendBookingConfirmationEmail, sendBookingUpdateEmail } from '../utils/mailer.js';
+import User from '../models/User.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -20,11 +23,14 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 
 export const getAllBookings = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
+  const { sessionId } = req.query;
   const filter = locationId ? { locationId } : {};
+  if (sessionId) filter.sessionId = sessionId;
   const bookings = await Booking.find(filter)
     .populate('userId', 'name email')
     .populate('classId', 'title price')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+    .populate('participants.childId', 'name age gender')
     .sort({ createdAt: -1 });
   res.json(bookings);
 });
@@ -159,6 +165,23 @@ export const createBooking = asyncHandler(async (req, res) => {
     await session.save();
   }
 
+  // Send Confirmation Email
+  const userForEmail = req.user || { name: guestDetails.name, email: guestDetails.email };
+  sendBookingConfirmationEmail(created, classItem, userForEmail).catch(err => console.error('Booking confirmation email failed:', err.message));
+
+  // Real-time Notification for Admins
+  const io = req.app.get('io');
+  if (io) {
+    const loc = await Location.findById(resolvedLocationId).select('name');
+    io.to('admin_room').emit('new_booking', {
+      bookingNumber: created.bookingNumber,
+      locationName: loc?.name || 'Unknown Location',
+      locationId: resolvedLocationId,
+      amount: totalAmount,
+      customerName: userForEmail.name
+    });
+  }
+
   res.status(201).json(created);
 });
 
@@ -174,6 +197,15 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
   }
   booking.status = req.body.status || booking.status;
   const saved = await booking.save();
+
+  // Send Status Update Email
+  if (req.body.status) {
+    const userData = await User.findById(saved.userId) || saved.guestDetails;
+    if (userData && (userData.email || saved.guestDetails?.email)) {
+      sendBookingUpdateEmail(saved, saved.status, userData).catch(err => console.error('Booking status update email failed:', err.message));
+    }
+  }
+
   res.json(saved);
 });
 
@@ -235,6 +267,14 @@ export const resolveRefundRequest = asyncHandler(async (req, res) => {
   }
 
   await booking.save();
+
+  // Send Refund/Status Update Email
+  const userData = await User.findById(booking.userId) || booking.guestDetails;
+  if (userData) {
+    const statusLabel = status === 'refunded' ? 'Cancelled & Refunded' : 'Refund Request Declined';
+    sendBookingUpdateEmail(booking, statusLabel, userData).catch(err => console.error('Refund resolution email failed:', err.message));
+  }
+
   res.json({ message: `Refund request ${status} successfully`, booking });
 });
 
