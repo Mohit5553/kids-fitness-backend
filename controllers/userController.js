@@ -1,6 +1,7 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { sendAccountUpdateEmail } from '../utils/mailer.js';
 
 export const getUsers = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
@@ -31,6 +32,10 @@ export const updateUserRole = asyncHandler(async (req, res) => {
     user.locationId = req.body.locationId || null;
   }
   const saved = await user.save();
+
+  // Notify User of account changes
+  sendAccountUpdateEmail(saved, 'account permissions/role').catch(err => console.error('Account update email failed:', err.message));
+
   res.json({ _id: saved._id, role: saved.role, locationId: saved.locationId });
 });
 

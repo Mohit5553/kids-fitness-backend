@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
+import { sendWelcomeEmail } from '../utils/mailer.js';
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -78,6 +79,9 @@ export const registerUser = asyncHandler(async (req, res) => {
 
   // Link any guest bookings made with this email to the new account
   await linkUserBookings(user);
+
+  // Send Welcome Email
+  sendWelcomeEmail(user).catch(err => console.error('Welcome email failed:', err.message));
 
   res.status(201).json({
     _id: user._id,

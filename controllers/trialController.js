@@ -1,6 +1,6 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Trial from '../models/Trial.js';
-import { sendTrialEmail } from '../utils/mailer.js';
+import { sendTrialConfirmationEmail } from '../utils/mailer.js';
 import { sendSms } from '../utils/sms.js';
 import { toCsv } from '../utils/csv.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
@@ -27,13 +27,13 @@ export const createTrial = asyncHandler(async (req, res) => {
 
   let emailSent = false;
   let smsSent = false;
-  if (process.env.ADMIN_EMAIL && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    try {
-      await sendTrialEmail(created);
-      emailSent = true;
-    } catch (err) {
-      console.error('Trial email failed', err.message);
-    }
+  
+  // Send Email to Parent and Admin
+  try {
+    await sendTrialConfirmationEmail(created);
+    emailSent = true;
+  } catch (err) {
+    console.error('Trial notification emails failed:', err.message);
   }
 
   if (parentPhone) {

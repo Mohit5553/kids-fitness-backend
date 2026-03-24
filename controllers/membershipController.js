@@ -1,7 +1,9 @@
 import asyncHandler from 'express-async-handler';
 import Membership from '../models/Membership.js';
 import Plan from '../models/Plan.js';
+import User from '../models/User.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { sendMembershipUpdateEmail } from '../utils/mailer.js';
 
 const addWeeks = (date, weeks) => new Date(date.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
 const addMonths = (date, months) => {
@@ -88,5 +90,13 @@ export const updateMembership = asyncHandler(async (req, res) => {
   }
   Object.assign(membership, req.body);
   const saved = await membership.save();
+
+  // Notify User
+  const userData = await User.findById(saved.userId);
+  const planData = await Plan.findById(saved.planId);
+  if (userData && planData) {
+    sendMembershipUpdateEmail(saved, userData, planData).catch(err => console.error('Membership update email failed:', err.message));
+  }
+
   res.json(saved);
 });

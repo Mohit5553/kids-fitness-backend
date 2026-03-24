@@ -62,8 +62,32 @@ export const getSessionById = asyncHandler(async (req, res) => {
   res.json(session);
 });
 
+const checkTrainerConflict = async (trainerId, startTime, endTime, sessionId = null) => {
+  if (!trainerId || !startTime || !endTime) return;
+  
+  const query = {
+    trainerId,
+    status: 'scheduled',
+    $or: [
+      { startTime: { $lt: endTime, $gte: startTime } }, // starts during
+      { endTime: { $gt: startTime, $lte: endTime } },  // ends during
+      { startTime: { $lte: startTime }, endTime: { $gte: endTime } } // spans over
+    ]
+  };
+
+  if (sessionId) {
+    query._id = { $ne: sessionId };
+  }
+
+  const conflict = await Session.findOne(query).populate('classId', 'title');
+  if (conflict) {
+    const timeStr = `${new Date(conflict.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(conflict.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    throw new Error(`Trainer is already assigned to "${conflict.classId?.title || 'another session'}" at this time (${timeStr}).`);
+  }
+};
+
 export const createSession = asyncHandler(async (req, res) => {
-  const { classId, trainerId, startTime, endTime, capacity, location, status } = req.body;
+  let { classId, trainerId, startTime, endTime, capacity, location, status } = req.body;
   if (!classId || !startTime) {
     res.status(400);
     throw new Error('classId and startTime are required');
@@ -75,6 +99,17 @@ export const createSession = asyncHandler(async (req, res) => {
     throw new Error('Class not found');
   }
 
+  const start = new Date(startTime);
+  let end = endTime ? new Date(endTime) : null;
+
+  if (!end && classItem.duration) {
+    const durationMinutes = parseInt(classItem.duration) || 60;
+    end = new Date(start.getTime() + durationMinutes * 60000);
+  }
+
+  // Conflict Check
+  await checkTrainerConflict(trainerId, start, end);
+
   const locationId = resolveWriteLocationId(req) || classItem.locationId;
   if (!locationId) {
     res.status(400);
@@ -84,8 +119,8 @@ export const createSession = asyncHandler(async (req, res) => {
   const created = await Session.create({
     classId,
     trainerId,
-    startTime,
-    endTime,
+    startTime: start,
+    endTime: end,
     capacity: capacity ?? classItem.capacity,
     location,
     status,
@@ -104,7 +139,26 @@ export const updateSession = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Not allowed');
   }
-  Object.assign(session, req.body);
+
+  const updateData = { ...req.body };
+  const start = updateData.startTime ? new Date(updateData.startTime) : session.startTime;
+  let end = updateData.endTime ? new Date(updateData.endTime) : session.endTime;
+
+  if (updateData.startTime && !updateData.endTime) {
+    const classItem = await ClassModel.findById(session.classId);
+    if (classItem && classItem.duration) {
+      const durationMinutes = parseInt(classItem.duration) || 60;
+      end = new Date(start.getTime() + durationMinutes * 60000);
+      updateData.endTime = end;
+    }
+  }
+
+  // Conflict Check
+  if (updateData.trainerId || updateData.startTime || updateData.endTime) {
+    await checkTrainerConflict(updateData.trainerId || session.trainerId, start, end, session._id);
+  }
+
+  Object.assign(session, updateData);
   const saved = await session.save();
   res.json(saved);
 });
