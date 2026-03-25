@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
+import Role from '../models/Role.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
   const auth = req.headers.authorization || '';
@@ -25,12 +26,21 @@ export const protect = asyncHandler(async (req, res, next) => {
       console.error('Auth Middleware: JWT_SECRET is missing from environment!');
     }
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
+    req.user = await User.findById(decoded.id).select('-password').lean();
     if (!req.user) {
       console.error(`Auth Middleware: User not found for ID ${decoded.id}`);
       res.status(401);
       throw new Error('Not authorized, user not found');
     }
+
+    // Fetch permissions from Role model
+    if (req.user.role === 'superadmin') {
+      req.user.permissions = ['*']; // Global access
+    } else {
+      const roleDoc = await Role.findOne({ name: req.user.role, status: 'active' });
+      req.user.permissions = roleDoc ? roleDoc.permissions || [] : [];
+    }
+
     next();
   } catch (err) {
     console.error(`Auth Middleware: Token invalid - Details: ${err.message}`);
@@ -59,10 +69,27 @@ export const optionalAuth = asyncHandler(async (req, res, next) => {
 });
 
 export const adminOnly = (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin')) {
+  // Staff includes admin, superadmin, or anyone with permissions
+  const isStaff = req.user && (
+    req.user.role === 'admin' || 
+    req.user.role === 'superadmin' || 
+    req.user.role === 'trainer' ||
+    (req.user.permissions && req.user.permissions.length > 0)
+  );
+
+  if (isStaff) {
     next();
   } else {
     res.status(403);
     throw new Error('Admin access required');
+  }
+};
+
+export const checkPermission = (permission) => (req, res, next) => {
+  if (req.user && (req.user.permissions.includes('*') || req.user.permissions.includes(permission))) {
+    next();
+  } else {
+    res.status(403);
+    throw new Error(`Forbidden: Missing permission [${permission}]`);
   }
 };

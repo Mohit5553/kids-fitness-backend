@@ -95,11 +95,16 @@ export const getParentSummary = asyncHandler(async (req, res) => {
 // @access  Private/Admin
 export const getDetailedReport = asyncHandler(async (req, res) => {
   const { type } = req.params;
-  const { startDate, endDate, locationId: queryLocationId } = req.query;
-  const locationId = queryLocationId || resolveReadLocationId(req);
+  const { startDate, endDate, locationId: queryLocationId, all } = req.query;
   
   const filter = {};
-  if (locationId) filter.locationId = locationId;
+  // If 'all' is true, we don't apply location filter. 
+  // If queryLocationId is provided, we use it.
+  // Otherwise, we use the default resolveReadLocationId (which might restrict to one branch).
+  if (all !== 'true') {
+    const locationId = queryLocationId || resolveReadLocationId(req);
+    if (locationId) filter.locationId = locationId;
+  }
   
   const dateFilter = {};
   if (startDate && endDate) {
@@ -117,16 +122,26 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
 
   switch (type) {
     case 'classes':
-      data = await ClassModel.find(filter).populate('availableTrainers', 'name').sort({ createdAt: -1 }).lean();
+      data = await ClassModel.find(filter)
+        .populate('availableTrainers', 'name')
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
       // Enrich with session/booking counts if needed, but for simplicity we'll return basic data first
       break;
 
     case 'trainers':
-      data = await Trainer.find(filter).sort({ createdAt: -1 }).lean();
+      data = await Trainer.find(filter)
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
       break;
 
     case 'pricing':
-      data = await Plan.find(filter).sort({ createdAt: -1 }).lean();
+      data = await Plan.find(filter)
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
       break;
 
     case 'bookings':
@@ -141,13 +156,17 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       data = await Booking.find({ ...filter, ...bookingDateFilter })
         .populate('userId', 'name email phone')
         .populate('classId', 'title')
+        .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
         .populate('locationId', 'name')
         .sort({ date: -1 })
         .lean();
       break;
 
     case 'trials':
-      data = await Trial.find({ ...filter, ...dateFilter }).sort({ createdAt: -1 }).lean();
+      data = await Trial.find({ ...filter, ...dateFilter })
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
       break;
 
     case 'payments':
@@ -160,9 +179,46 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
 
     case 'users':
       // Fetch only regular users (parents), not admins
-      data = await User.find({ ...filter, ...dateFilter, role: 'user' })
+      data = await User.find({ ...filter, ...dateFilter, role: 'parent' })
+        .populate('locationId', 'name')
         .sort({ createdAt: -1 })
         .lean();
+      break;
+
+    case 'trainer_sales':
+      // This report shows sessions and counts bookings/revenue per session
+      const sessionFilter = { ...filter };
+      if (startDate && endDate) {
+        sessionFilter.startTime = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        };
+      }
+
+      const sessions = await Session.find(sessionFilter)
+        .populate('classId', 'title')
+        .populate('trainerId', 'name')
+        .populate('locationId', 'name')
+        .sort({ startTime: -1 })
+        .lean();
+
+      // For each session, find confirmed bookings and sum revenue
+      data = await Promise.all(sessions.map(async (s) => {
+        const bookings = await Booking.find({ sessionId: s._id, status: 'confirmed' });
+        const totalSales = bookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
+        const bookingCount = bookings.reduce((sum, b) => sum + (b.participants?.length || 1), 0);
+        
+        return {
+          ...s,
+          classTitle: s.classId?.title || 'N/A',
+          trainerName: s.trainerId?.name || 'TBA',
+          branchName: s.locationId?.name || 'N/A',
+          date: s.startTime,
+          bookingsCount: bookingCount,
+          totalRevenue: totalSales,
+          sessionStatus: new Date(s.startTime) < new Date() ? 'Closed' : 'Open'
+        };
+      }));
       break;
 
     default:

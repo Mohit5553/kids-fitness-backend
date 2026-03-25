@@ -37,7 +37,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
 
 export const createBooking = asyncHandler(async (req, res) => {
   const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails } = req.body;
-  
+
   if (!req.user && (!guestDetails || !guestDetails.name || !guestDetails.email)) {
     res.status(400);
     throw new Error('Must be logged in or provide guest details');
@@ -82,7 +82,7 @@ export const createBooking = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Class not found');
   }
-  
+
   if (!resolvedLocationId) resolvedLocationId = classItem.locationId;
   if (!resolvedDate) {
     res.status(400);
@@ -298,20 +298,20 @@ export const deleteBooking = asyncHandler(async (req, res) => {
  */
 export const linkUserBookings = async (user) => {
   if (!user || !user.email) return;
-  
+
   try {
     // 1. Link Bookings
     const bookingResult = await Booking.updateMany(
       { userId: { $exists: false }, 'guestDetails.email': user.email },
       { $set: { userId: user._id } }
     );
-    
+
     // 2. Link SalesOrders
     const orderResult = await SalesOrder.updateMany(
       { userId: { $exists: false }, 'guestDetails.email': user.email },
       { $set: { userId: user._id } }
     );
-    
+
     console.log(`Linked ${bookingResult.modifiedCount} bookings and ${orderResult.modifiedCount} orders for ${user.email}`);
   } catch (error) {
     console.error(`Error linking guest bookings for ${user.email}:`, error);

@@ -34,6 +34,7 @@ import reportRoutes from './routes/reportRoutes.js';
 import trialRoutes from './routes/trialRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import specialtyRoutes from './routes/specialtyRoutes.js';
+import roleRoutes from './routes/roleRoutes.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -52,7 +53,7 @@ app.set('io', io);
 
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
-  
+
   socket.on('join_admin', () => {
     socket.join('admin_room');
     console.log('Client joined admin room:', socket.id);
@@ -94,6 +95,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/trials', trialRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/specialties', specialtyRoutes);
+app.use('/api/roles', roleRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

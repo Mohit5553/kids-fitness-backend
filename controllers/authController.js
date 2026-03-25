@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import Trainer from '../models/Trainer.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
 import { sendWelcomeEmail } from '../utils/mailer.js';
@@ -52,7 +53,8 @@ export const registerUser = asyncHandler(async (req, res) => {
     address,
     city,
     country,
-    avatarUrl
+    avatarUrl,
+    role: 'customer' // Force customer role for public registration
   });
   
   // Create children if provided
@@ -83,6 +85,12 @@ export const registerUser = asyncHandler(async (req, res) => {
   // Send Welcome Email
   sendWelcomeEmail(user).catch(err => console.error('Welcome email failed:', err.message));
 
+  let trainerId = null;
+  if (user.role === 'trainer') {
+    const trainerProfile = await Trainer.findOne({ userId: user._id });
+    trainerId = trainerProfile?._id;
+  }
+
   res.status(201).json({
     _id: user._id,
     name: user.name,
@@ -93,6 +101,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     role: user.role,
     locationId: user.locationId,
     avatarUrl: user.avatarUrl,
+    trainerId,
     token: generateToken(user._id)
   });
 });
@@ -119,6 +128,12 @@ export const loginUser = asyncHandler(async (req, res) => {
   // Ensure any guest bookings made with this email are linked
   await linkUserBookings(user);
 
+  let trainerId = null;
+  if (user.role === 'trainer') {
+    const trainerProfile = await Trainer.findOne({ userId: user._id });
+    trainerId = trainerProfile?._id;
+  }
+
   res.json({
     _id: user._id,
     name: user.name,
@@ -126,6 +141,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     phone: user.phone,
     role: user.role,
     locationId: user.locationId,
+    trainerId,
     token: generateToken(user._id)
   });
 });

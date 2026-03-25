@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Child from '../models/Child.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -10,6 +10,7 @@ export const getMyChildren = asyncHandler(async (req, res) => {
 export const getAllChildren = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
+  if (req.query.parentId) filter.parentId = req.query.parentId;
   const children = await Child.find(filter).sort({ createdAt: -1 });
   res.json(children);
 });
