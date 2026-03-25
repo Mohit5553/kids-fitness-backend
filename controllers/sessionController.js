@@ -62,9 +62,9 @@ export const getSessionById = asyncHandler(async (req, res) => {
   res.json(session);
 });
 
-const checkTrainerConflict = async (trainerId, startTime, endTime, sessionId = null) => {
+const checkTrainerConflict = async (res, trainerId, startTime, endTime, sessionId = null) => {
   if (!trainerId || !startTime || !endTime) return;
-  
+
   const query = {
     trainerId,
     status: 'scheduled',
@@ -81,6 +81,7 @@ const checkTrainerConflict = async (trainerId, startTime, endTime, sessionId = n
 
   const conflict = await Session.findOne(query).populate('classId', 'title');
   if (conflict) {
+    if (res) res.status(400);
     const timeStr = `${new Date(conflict.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(conflict.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     throw new Error(`Trainer is already assigned to "${conflict.classId?.title || 'another session'}" at this time (${timeStr}).`);
   }
@@ -108,7 +109,7 @@ export const createSession = asyncHandler(async (req, res) => {
   }
 
   // Conflict Check
-  await checkTrainerConflict(trainerId, start, end);
+  await checkTrainerConflict(res, trainerId, start, end);
 
   const locationId = resolveWriteLocationId(req) || classItem.locationId;
   if (!locationId) {
@@ -155,7 +156,7 @@ export const updateSession = asyncHandler(async (req, res) => {
 
   // Conflict Check
   if (updateData.trainerId || updateData.startTime || updateData.endTime) {
-    await checkTrainerConflict(updateData.trainerId || session.trainerId, start, end, session._id);
+    await checkTrainerConflict(res, updateData.trainerId || session.trainerId, start, end, session._id);
   }
 
   Object.assign(session, updateData);

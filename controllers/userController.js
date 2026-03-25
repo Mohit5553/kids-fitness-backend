@@ -2,11 +2,15 @@ import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendAccountUpdateEmail } from '../utils/mailer.js';
+import bcrypt from 'bcryptjs';
 
 export const getUsers = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
-  const filter = locationId ? { locationId } : {};
-  const users = await User.find(filter).select('-password').sort({ createdAt: -1 });
+  const filter = (req.query.all === 'true' || !locationId) ? {} : { locationId };
+  const users = await User.find(filter)
+    .populate('locationId', 'name')
+    .select('-password')
+    .sort({ createdAt: -1 });
   res.json(users);
 });
 
@@ -47,4 +51,33 @@ export const deleteUser = asyncHandler(async (req, res) => {
   }
   await user.deleteOne();
   res.json({ message: 'User removed' });
+});
+
+export const createStaff = asyncHandler(async (req, res) => {
+  const { name, email, password, role, phone, locationId } = req.body;
+
+  const userExists = await User.findOne({ email });
+  if (userExists) {
+    res.status(400);
+    throw new Error('User already exists');
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(password, salt);
+
+  const user = await User.create({
+    name,
+    email,
+    password: hashedPassword,
+    role,
+    phone,
+    locationId: locationId || req.user.locationId
+  });
+
+  res.status(201).json({
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role
+  });
 });

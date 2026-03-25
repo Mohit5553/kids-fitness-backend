@@ -1,4 +1,4 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
 import Attendance from '../models/Attendance.js';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
@@ -25,11 +25,12 @@ export const getAllAttendance = asyncHandler(async (req, res) => {
 });
 
 export const checkIn = asyncHandler(async (req, res) => {
-  const { bookingId, sessionId, childId, status, method } = req.body;
+  const { bookingId, sessionId, childId, participantName, status, method } = req.body;
 
   let resolvedSessionId = sessionId;
-  let resolvedChildId = childId;
-  let resolvedUserId = req.user._id;
+  let resolvedChildId = childId || null;
+  let resolvedName = participantName || null;
+  let resolvedUserId = req.user?._id || null;
   let resolvedLocationId = null;
 
   if (bookingId) {
@@ -39,14 +40,15 @@ export const checkIn = asyncHandler(async (req, res) => {
       throw new Error('Booking not found');
     }
     resolvedSessionId = booking.sessionId;
-    resolvedChildId = booking.childId;
-    resolvedUserId = booking.userId;
     resolvedLocationId = booking.locationId;
+    
+    // If we're looking for a specific child but no childId provided, 
+    // we assume the first participant or similar, but the frontend should provide the name.
   }
 
-  if (!resolvedSessionId || !resolvedChildId) {
+  if (!resolvedSessionId || (!resolvedChildId && !resolvedName)) {
     res.status(400);
-    throw new Error('sessionId and childId are required');
+    throw new Error('sessionId and either childId or participantName are required');
   }
 
   if (!resolvedLocationId) {
@@ -54,7 +56,12 @@ export const checkIn = asyncHandler(async (req, res) => {
     resolvedLocationId = session?.locationId || null;
   }
 
-  const existing = await Attendance.findOne({ sessionId: resolvedSessionId, childId: resolvedChildId });
+  // Filter for uniqueness
+  const filter = { sessionId: resolvedSessionId };
+  if (resolvedChildId) filter.childId = resolvedChildId;
+  else filter.participantName = resolvedName;
+
+  const existing = await Attendance.findOne(filter);
   if (existing) {
     existing.status = status || existing.status;
     existing.method = method || existing.method;
@@ -67,6 +74,7 @@ export const checkIn = asyncHandler(async (req, res) => {
     bookingId,
     sessionId: resolvedSessionId,
     childId: resolvedChildId,
+    participantName: resolvedName,
     userId: resolvedUserId,
     status,
     method,
