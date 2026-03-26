@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     phone: { type: String },
     password: { type: String, required: true },
-    role: { type: String, enum: ['superadmin', 'admin', 'parent', 'trainer'], default: 'parent' },
+    role: { type: String, default: 'parent' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     instagram: { type: String },
     gender: { type: String, enum: ['male', 'female', 'other'] },

@@ -1,12 +1,17 @@
 import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
+import Child from '../models/Child.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendAccountUpdateEmail } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
 
 export const getUsers = asyncHandler(async (req, res) => {
+  const isAdminOrSuper = req.user.role === 'superadmin' || req.user.role === 'admin';
   const locationId = resolveReadLocationId(req);
-  const filter = (req.query.all === 'true' || !locationId) ? {} : { locationId };
+
+  // Admins and Superadmins see all users. Others (if any staff) see their branch.
+  const filter = (isAdminOrSuper || req.query.all === 'true' || !locationId) ? {} : { locationId };
+
   const users = await User.find(filter)
     .populate('locationId', 'name')
     .select('-password')
@@ -80,4 +85,9 @@ export const createStaff = asyncHandler(async (req, res) => {
     email: user.email,
     role: user.role
   });
+});
+
+export const getUserChildren = asyncHandler(async (req, res) => {
+  const children = await Child.find({ parentId: req.params.id });
+  res.json(children);
 });

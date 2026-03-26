@@ -9,6 +9,7 @@ import Payment from '../models/Payment.js';
 import Child from '../models/Child.js';
 import Plan from '../models/Plan.js';
 import Trial from '../models/Trial.js';
+import Attendance from '../models/Attendance.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
@@ -107,15 +108,19 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
   }
   
   const dateFilter = {};
-  if (startDate && endDate) {
+  const sDate = startDate ? new Date(startDate) : null;
+  const eDate = endDate ? new Date(endDate) : null;
+  if (eDate) eDate.setHours(23, 59, 59, 999);
+
+  if (sDate && eDate) {
     dateFilter.createdAt = {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate)
+      $gte: sDate,
+      $lte: eDate
     };
-  } else if (startDate) {
-    dateFilter.createdAt = { $gte: new Date(startDate) };
-  } else if (endDate) {
-    dateFilter.createdAt = { $lte: new Date(endDate) };
+  } else if (sDate) {
+    dateFilter.createdAt = { $gte: sDate };
+  } else if (eDate) {
+    dateFilter.createdAt = { $lte: eDate };
   }
 
   let data = [];
@@ -147,15 +152,15 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
     case 'bookings':
       // For bookings, we might want to filter by 'date' instead of 'createdAt' for the actual class date
       const bookingDateFilter = {};
-      if (startDate && endDate) {
+      if (sDate && eDate) {
         bookingDateFilter.date = {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
+          $gte: sDate,
+          $lte: eDate
         };
       }
       data = await Booking.find({ ...filter, ...bookingDateFilter })
         .populate('userId', 'name email phone')
-        .populate('classId', 'title')
+        .populate('classId', 'title capacity')
         .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
         .populate('locationId', 'name')
         .sort({ date: -1 })
@@ -178,8 +183,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       break;
 
     case 'users':
-      // Fetch only regular users (parents), not admins
-      data = await User.find({ ...filter, ...dateFilter, role: 'parent' })
+      // Fetch regular users (parents and customers), not admins
+      data = await User.find({ ...filter, ...dateFilter, role: { $in: ['parent', 'customer'] } })
         .populate('locationId', 'name')
         .sort({ createdAt: -1 })
         .lean();
@@ -188,10 +193,10 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
     case 'trainer_sales':
       // This report shows sessions and counts bookings/revenue per session
       const sessionFilter = { ...filter };
-      if (startDate && endDate) {
+      if (sDate && eDate) {
         sessionFilter.startTime = {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
+          $gte: sDate,
+          $lte: eDate
         };
       }
 
@@ -219,6 +224,24 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           sessionStatus: new Date(s.startTime) < new Date() ? 'Closed' : 'Open'
         };
       }));
+      break;
+
+    case 'attendance':
+      const attendanceDateFilter = {};
+      if (sDate && eDate) {
+        attendanceDateFilter.checkedInAt = {
+          $gte: sDate,
+          $lte: eDate
+        };
+      }
+      data = await Attendance.find({ ...filter, ...attendanceDateFilter })
+        .populate('bookingId', 'bookingNumber')
+        .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+        .populate('childId', 'name')
+        .populate('userId', 'name email phone')
+        .populate('locationId', 'name')
+        .sort({ checkedInAt: -1 })
+        .lean();
       break;
 
     default:

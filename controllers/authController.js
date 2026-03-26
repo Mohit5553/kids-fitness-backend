@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Trainer from '../models/Trainer.js';
+import Role from '../models/Role.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
 import { sendWelcomeEmail } from '../utils/mailer.js';
@@ -14,10 +15,10 @@ const generateToken = (id) => {
 };
 
 export const registerUser = asyncHandler(async (req, res) => {
-  const { 
-    name, email, phone, password, 
-    firstName, lastName, instagram, gender, 
-    relationship, birthDate, address, city, 
+  const {
+    name, email, phone, password,
+    firstName, lastName, instagram, gender,
+    relationship, birthDate, address, city,
     country, avatarUrl, locationId: preferredLocation,
     children // Array of child objects
   } = req.body;
@@ -38,13 +39,13 @@ export const registerUser = asyncHandler(async (req, res) => {
 
   const locationId = preferredLocation || resolveWriteLocationId(req);
 
-  const user = await User.create({ 
-    name, 
-    firstName, 
-    lastName, 
-    email, 
-    phone, 
-    password: hashed, 
+  const user = await User.create({
+    name,
+    firstName,
+    lastName,
+    email,
+    phone,
+    password: hashed,
     locationId,
     instagram,
     gender,
@@ -56,7 +57,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     avatarUrl,
     role: 'customer' // Force customer role for public registration
   });
-  
+
   // Create children if provided
   if (children && Array.isArray(children)) {
     for (const childData of children) {
@@ -86,6 +87,14 @@ export const registerUser = asyncHandler(async (req, res) => {
   sendWelcomeEmail(user).catch(err => console.error('Welcome email failed:', err.message));
 
   let trainerId = null;
+  let permissions = [];
+  if (user.role === 'superadmin') {
+    permissions = ['*'];
+  } else {
+    const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
+    permissions = roleDoc ? roleDoc.permissions || [] : [];
+  }
+
   if (user.role === 'trainer') {
     const trainerProfile = await Trainer.findOne({ userId: user._id });
     trainerId = trainerProfile?._id;
@@ -102,6 +111,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     locationId: user.locationId,
     avatarUrl: user.avatarUrl,
     trainerId,
+    permissions,
     token: generateToken(user._id)
   });
 });
@@ -129,6 +139,14 @@ export const loginUser = asyncHandler(async (req, res) => {
   await linkUserBookings(user);
 
   let trainerId = null;
+  let permissions = [];
+  if (user.role === 'superadmin') {
+    permissions = ['*'];
+  } else {
+    const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
+    permissions = roleDoc ? roleDoc.permissions || [] : [];
+  }
+
   if (user.role === 'trainer') {
     const trainerProfile = await Trainer.findOne({ userId: user._id });
     trainerId = trainerProfile?._id;
@@ -142,6 +160,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     role: user.role,
     locationId: user.locationId,
     trainerId,
+    permissions,
     token: generateToken(user._id)
   });
 });
