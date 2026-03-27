@@ -1,4 +1,5 @@
-﻿import asyncHandler from 'express-async-handler';
+import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import Location from '../models/Location.js';
 
 const isIpHost = (host) => /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
@@ -21,7 +22,7 @@ export const locationMiddleware = asyncHandler(async (req, res, next) => {
 
   let location = null;
 
-  if (headerId) {
+  if (headerId && mongoose.Types.ObjectId.isValid(headerId)) {
     location = await Location.findById(headerId);
   } else {
     const slug = headerSlug || querySlug || hostnameSlug || fallbackSlug;

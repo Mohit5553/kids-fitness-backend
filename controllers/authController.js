@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Trainer from '../models/Trainer.js';
+import Role from '../models/Role.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
 import { sendWelcomeEmail } from '../utils/mailer.js';
@@ -14,11 +15,11 @@ const generateToken = (id) => {
 };
 
 export const registerUser = asyncHandler(async (req, res) => {
-  const { 
-    name, email, phone, password, 
-    firstName, lastName, instagram, gender, 
-    relationship, birthDate, address, city, 
-    country, avatarUrl, locationId: preferredLocation,
+  const {
+    name, email, phone, password,
+    firstName, lastName, instagram, gender,
+    relationship, birthDate, address, city,
+    country, avatarUrl, locationIds: preferredLocationIds,
     children // Array of child objects
   } = req.body;
 
@@ -36,16 +37,16 @@ export const registerUser = asyncHandler(async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   const hashed = await bcrypt.hash(password, salt);
 
-  const locationId = preferredLocation || resolveWriteLocationId(req);
+  const locationIds = preferredLocationIds || [resolveWriteLocationId(req)].filter(Boolean);
 
-  const user = await User.create({ 
-    name, 
-    firstName, 
-    lastName, 
-    email, 
-    phone, 
-    password: hashed, 
-    locationId,
+  const user = await User.create({
+    name,
+    firstName,
+    lastName,
+    email,
+    phone,
+    password: hashed,
+    locationIds,
     instagram,
     gender,
     relationship,
@@ -56,7 +57,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     avatarUrl,
     role: 'customer' // Force customer role for public registration
   });
-  
+
   // Create children if provided
   if (children && Array.isArray(children)) {
     for (const childData of children) {
@@ -73,7 +74,7 @@ export const registerUser = asyncHandler(async (req, res) => {
           photoUrl: childData.photoUrl,
           school: childData.school,
           medicalCondition: childData.medicalCondition,
-          locationId
+          locationId: locationIds[0]
         });
       }
     }
@@ -86,6 +87,14 @@ export const registerUser = asyncHandler(async (req, res) => {
   sendWelcomeEmail(user).catch(err => console.error('Welcome email failed:', err.message));
 
   let trainerId = null;
+  let permissions = [];
+  if (user.role === 'superadmin') {
+    permissions = ['*'];
+  } else {
+    const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
+    permissions = roleDoc ? roleDoc.permissions || [] : [];
+  }
+
   if (user.role === 'trainer') {
     const trainerProfile = await Trainer.findOne({ userId: user._id });
     trainerId = trainerProfile?._id;
@@ -99,9 +108,10 @@ export const registerUser = asyncHandler(async (req, res) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    locationId: user.locationId,
+    locationIds: user.locationIds,
     avatarUrl: user.avatarUrl,
     trainerId,
+    permissions,
     token: generateToken(user._id)
   });
 });
@@ -129,6 +139,14 @@ export const loginUser = asyncHandler(async (req, res) => {
   await linkUserBookings(user);
 
   let trainerId = null;
+  let permissions = [];
+  if (user.role === 'superadmin') {
+    permissions = ['*'];
+  } else {
+    const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
+    permissions = roleDoc ? roleDoc.permissions || [] : [];
+  }
+
   if (user.role === 'trainer') {
     const trainerProfile = await Trainer.findOne({ userId: user._id });
     trainerId = trainerProfile?._id;
@@ -140,8 +158,9 @@ export const loginUser = asyncHandler(async (req, res) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    locationId: user.locationId,
+    locationIds: user.locationIds,
     trainerId,
+    permissions,
     token: generateToken(user._id)
   });
 });
