@@ -19,7 +19,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     name, email, phone, password,
     firstName, lastName, instagram, gender,
     relationship, birthDate, address, city,
-    country, avatarUrl, locationId: preferredLocation,
+    country, avatarUrl, locationIds: preferredLocationIds,
     children // Array of child objects
   } = req.body;
 
@@ -37,7 +37,7 @@ export const registerUser = asyncHandler(async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   const hashed = await bcrypt.hash(password, salt);
 
-  const locationId = preferredLocation || resolveWriteLocationId(req);
+  const locationIds = preferredLocationIds || [resolveWriteLocationId(req)].filter(Boolean);
 
   const user = await User.create({
     name,
@@ -46,7 +46,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     email,
     phone,
     password: hashed,
-    locationId,
+    locationIds,
     instagram,
     gender,
     relationship,
@@ -74,7 +74,7 @@ export const registerUser = asyncHandler(async (req, res) => {
           photoUrl: childData.photoUrl,
           school: childData.school,
           medicalCondition: childData.medicalCondition,
-          locationId
+          locationId: locationIds[0]
         });
       }
     }
@@ -108,7 +108,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    locationId: user.locationId,
+    locationIds: user.locationIds,
     avatarUrl: user.avatarUrl,
     trainerId,
     permissions,
@@ -158,7 +158,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    locationId: user.locationId,
+    locationIds: user.locationIds,
     trainerId,
     permissions,
     token: generateToken(user._id)

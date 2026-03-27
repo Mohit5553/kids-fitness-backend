@@ -10,6 +10,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     role: { type: String, default: 'parent' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    locationIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
     instagram: { type: String },
     gender: { type: String, enum: ['male', 'female', 'other'] },
     relationship: { type: String },

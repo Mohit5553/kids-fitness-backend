@@ -10,10 +10,10 @@ export const getUsers = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
 
   // Admins and Superadmins see all users. Others (if any staff) see their branch.
-  const filter = (isAdminOrSuper || req.query.all === 'true' || !locationId) ? {} : { locationId };
+  const filter = (isAdminOrSuper || req.query.all === 'true' || !locationId) ? {} : { $or: [{ locationIds: locationId }, { locationId: locationId }] };
 
   const users = await User.find(filter)
-    .populate('locationId', 'name')
+    .populate('locationIds', 'name')
     .select('-password')
     .sort({ createdAt: -1 });
   res.json(users);
@@ -37,15 +37,15 @@ export const updateUserRole = asyncHandler(async (req, res) => {
   if (req.body.role) {
     user.role = req.body.role;
   }
-  if (req.user?.role === 'superadmin' && req.body.locationId !== undefined) {
-    user.locationId = req.body.locationId || null;
+  if (req.user?.role === 'superadmin' && req.body.locationIds !== undefined) {
+    user.locationIds = req.body.locationIds || [];
   }
   const saved = await user.save();
 
   // Notify User of account changes
   sendAccountUpdateEmail(saved, 'account permissions/role').catch(err => console.error('Account update email failed:', err.message));
 
-  res.json({ _id: saved._id, role: saved.role, locationId: saved.locationId });
+  res.json({ _id: saved._id, role: saved.role, locationIds: saved.locationIds });
 });
 
 export const deleteUser = asyncHandler(async (req, res) => {
@@ -59,7 +59,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
-  const { name, email, password, role, phone, locationId } = req.body;
+  const { name, email, password, role, phone, locationIds } = req.body;
 
   const userExists = await User.findOne({ email });
   if (userExists) {
@@ -76,7 +76,7 @@ export const createStaff = asyncHandler(async (req, res) => {
     password: hashedPassword,
     role,
     phone,
-    locationId: locationId || req.user.locationId
+    locationIds: locationIds || (req.user.locationIds && req.user.locationIds.length > 0 ? [req.user.locationIds[0]] : [])
   });
 
   res.status(201).json({
