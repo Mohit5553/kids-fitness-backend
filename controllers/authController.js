@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Trainer from '../models/Trainer.js';
 import Role from '../models/Role.js';
+import Child from '../models/Child.js';
 import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
 import { sendWelcomeEmail } from '../utils/mailer.js';
@@ -166,5 +167,25 @@ export const loginUser = asyncHandler(async (req, res) => {
 });
 
 export const getMe = asyncHandler(async (req, res) => {
-  res.json(req.user);
+  const user = req.user.toObject ? req.user.toObject() : { ...req.user };
+  let trainerId = null;
+  let permissions = [];
+
+  if (user.role === 'superadmin') {
+    permissions = ['*'];
+  } else {
+    const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
+    permissions = roleDoc ? roleDoc.permissions || [] : [];
+  }
+
+  if (user.role === 'trainer') {
+    const trainerProfile = await Trainer.findOne({ userId: user._id });
+    trainerId = trainerProfile?._id;
+  }
+
+  res.json({
+    ...user,
+    trainerId,
+    permissions
+  });
 });

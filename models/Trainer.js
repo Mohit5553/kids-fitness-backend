@@ -10,7 +10,7 @@ const trainerSchema = new mongoose.Schema(
     avatarUrl: { type: String },
     gallery: [{ type: String }],
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    locationIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }

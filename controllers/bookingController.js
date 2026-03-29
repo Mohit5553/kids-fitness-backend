@@ -23,9 +23,15 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 
 export const getAllBookings = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
-  const { sessionId } = req.query;
+  const { sessionId, trainerId } = req.query;
   const filter = locationId ? { locationId } : {};
-  if (sessionId) filter.sessionId = sessionId;
+  if (sessionId) {
+    filter.sessionId = sessionId;
+  } else if (trainerId) {
+    const trainerSessions = await Session.find({ trainerId }).select('_id');
+    const trainerSessionIds = trainerSessions.map(s => s._id);
+    filter.sessionId = { $in: trainerSessionIds };
+  }
   const bookings = await Booking.find(filter)
     .populate('userId', 'name email')
     .populate('classId', 'title price')
