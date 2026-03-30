@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const paymentSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
     planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },

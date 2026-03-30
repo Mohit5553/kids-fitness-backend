@@ -3,15 +3,19 @@ import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
 import Booking from '../models/Booking.js';
 import { signQrToken } from '../utils/qrToken.js';
-import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
+import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getSessions = asyncHandler(async (req, res) => {
   const { start, end, classId, trainerId, locationId: queryLocationId } = req.query;
   const filter = {};
 
-  const locationId = queryLocationId || resolveReadLocationId(req);
-  if (locationId) {
-    filter.locationId = locationId;
+  if (queryLocationId) {
+    filter.locationId = queryLocationId;
+  } else {
+    const locationIds = resolveReadLocationIds(req);
+    if (locationIds && locationIds.length > 0) {
+      filter.locationId = { $in: locationIds };
+    }
   }
 
   if (start || end) {
@@ -28,8 +32,9 @@ export const getSessions = asyncHandler(async (req, res) => {
   if (trainerId) filter.trainerId = trainerId;
 
   const sessions = await Session.find(filter)
-    .populate('classId', 'title ageGroup duration price')
+    .populate('classId', 'title ageGroup duration price minAge maxAge')
     .populate('trainerId', 'name')
+    .populate('locationId', 'name')
     .sort({ createdAt: -1 });
 
   // Add bookingsCount to each session
@@ -53,8 +58,9 @@ export const getSessionById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
   const session = await Session.findOne(filter)
-    .populate('classId', 'title ageGroup duration price')
-    .populate('trainerId', 'name');
+    .populate('classId', 'title ageGroup duration price minAge maxAge')
+    .populate('trainerId', 'name')
+    .populate('locationId', 'name');
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
@@ -127,6 +133,14 @@ export const createSession = asyncHandler(async (req, res) => {
     status,
     locationId
   });
+
+  // Automatically add trainer to class's availableTrainers if they aren't there
+  if (trainerId) {
+    await ClassModel.findByIdAndUpdate(classId, {
+      $addToSet: { availableTrainers: trainerId }
+    });
+  }
+
   res.status(201).json(created);
 });
 
@@ -161,6 +175,14 @@ export const updateSession = asyncHandler(async (req, res) => {
 
   Object.assign(session, updateData);
   const saved = await session.save();
+
+  // If trainer was updated, add to class's availableTrainers
+  if (updateData.trainerId) {
+    await ClassModel.findByIdAndUpdate(session.classId, {
+      $addToSet: { availableTrainers: updateData.trainerId }
+    });
+  }
+
   res.json(saved);
 });
 

@@ -6,13 +6,13 @@ import { toCsv } from '../utils/csv.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const createTrial = asyncHandler(async (req, res) => {
-  const { parentName, parentEmail, parentPhone, childName, childAge, preferredClass, preferredTime } = req.body;
+  const { parentName, parentEmail, parentPhone, childName, childAge, preferredClass, preferredTime, locationId: bodyLocationId } = req.body;
   if (!parentName || !parentEmail || !childName) {
     res.status(400);
     throw new Error('Parent name, parent email, and child name are required');
   }
 
-  const locationId = resolveWriteLocationId(req);
+  const locationId = bodyLocationId || resolveWriteLocationId(req);
 
   const created = await Trial.create({
     parentName,

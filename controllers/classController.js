@@ -3,10 +3,11 @@ import ClassModel from '../models/Class.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getClasses = asyncHandler(async (req, res) => {
-  const locationId = resolveReadLocationId(req);
-  const filter = locationId ? { locationId } : {};
+  const { locationId: queryLocationId } = req.query;
+  const locationId = queryLocationId || resolveReadLocationId(req);
+  const filter = (locationId && locationId !== 'all') ? { locationId } : {};
   const classes = await ClassModel.find(filter)
-    .populate('availableTrainers', 'name status locationId bio specialties avatarUrl gallery')
+    .populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery')
     .sort({ createdAt: -1 });
   res.json(classes);
 });
@@ -14,7 +15,7 @@ export const getClasses = asyncHandler(async (req, res) => {
 export const getClassById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
-  const classItem = await ClassModel.findOne(filter).populate('availableTrainers', 'name status locationId bio specialties avatarUrl gallery');
+  const classItem = await ClassModel.findOne(filter).populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery');
   if (!classItem) {
     res.status(404);
     throw new Error('Class not found');

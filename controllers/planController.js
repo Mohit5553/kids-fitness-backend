@@ -3,9 +3,10 @@ import Plan from '../models/Plan.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getPlans = asyncHandler(async (req, res) => {
-  const locationId = resolveReadLocationId(req);
+  const { locationId: queryLocationId } = req.query;
+  const locationId = queryLocationId || resolveReadLocationId(req);
   // Show plans for the specific location OR global plans (locationId: null)
-  const filter = locationId ? { $or: [{ locationId }, { locationId: null }] } : {};
+  const filter = (locationId && locationId !== 'all') ? { $or: [{ locationId }, { locationId: null }] } : {};
   const plans = await Plan.find(filter).populate('locationId', 'name').sort({ createdAt: -1 });
   res.json(plans);
 });

@@ -45,7 +45,8 @@ const io = new Server(httpServer, {
     origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true
-  }
+  },
+  transports: ['polling', 'websocket']
 });
 
 // Make io accessible in controllers

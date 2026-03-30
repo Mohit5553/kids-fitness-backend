@@ -7,6 +7,7 @@ import Location from '../models/Location.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendBookingConfirmationEmail, sendBookingUpdateEmail } from '../utils/mailer.js';
 import User from '../models/User.js';
+import Payment from '../models/Payment.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -23,11 +24,18 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 
 export const getAllBookings = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
-  const { sessionId } = req.query;
+  const { sessionId, trainerId } = req.query;
   const filter = locationId ? { locationId } : {};
-  if (sessionId) filter.sessionId = sessionId;
+  if (sessionId) {
+    filter.sessionId = sessionId;
+  } else if (trainerId) {
+    const trainerSessions = await Session.find({ trainerId }).select('_id');
+    const trainerSessionIds = trainerSessions.map(s => s._id);
+    filter.sessionId = { $in: trainerSessionIds };
+  }
   const bookings = await Booking.find(filter)
     .populate('userId', 'name email')
+    .populate('processedBy', 'name email')
     .populate('classId', 'title price')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .populate('participants.childId', 'name age gender')
@@ -137,6 +145,13 @@ export const createBooking = asyncHandler(async (req, res) => {
 
   if (req.user) {
     bookingData.userId = req.user._id;
+    bookingData.userId = req.user._id;
+    // If a staff member (NOT a parent or customer) is creating this, record them as the processor
+    const isStaff = req.user.role !== 'parent' && req.user.role !== 'customer';
+    if (isStaff) {
+      bookingData.processedBy = req.user._id;
+      bookingData.processedByRole = req.user.role;
+    }
   } else {
     bookingData.guestDetails = guestDetails;
   }
@@ -158,6 +173,16 @@ export const createBooking = asyncHandler(async (req, res) => {
     }
     await SalesOrder.create(orderData);
   }
+
+  // Create a Payment record for both online and center payments so it shows in the Payments list
+  await Payment.create({
+    userId: req.user ? req.user._id : created.userId,
+    bookingId: created._id,
+    amount: totalAmount,
+    paymentMethod: paymentMethod || 'center',
+    status: paymentMethod === 'online' ? 'paid' : 'pending',
+    locationId: resolvedLocationId
+  });
 
   // Update session occupancy if applicable
   if (session) {
@@ -195,11 +220,38 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Not allowed');
   }
-  booking.status = req.body.status || booking.status;
+
+  const { status, paymentMethod, reference } = req.body;
+  booking.status = status || booking.status;
+  
+  if (status === 'confirmed') {
+    booking.paymentStatus = 'completed';
+    // Sync status and transaction specifics back to Payment record
+    const payRec = await Payment.findOne({ bookingId: booking._id });
+    if (payRec) {
+      payRec.status = 'paid';
+      const finalMethod = paymentMethod ? `center_${paymentMethod}` : 'center';
+      payRec.paymentMethod = finalMethod;
+      if (reference) payRec.reference = reference;
+      await payRec.save();
+      
+      // Also update booking's specific payment details
+      booking.paymentMethod = finalMethod;
+      booking.paymentReference = reference;
+    }
+    
+    // Record who processed the confirmation
+    const isStaff = req.user && req.user.role !== 'parent' && req.user.role !== 'customer';
+    if (isStaff) {
+      booking.processedBy = req.user._id;
+      booking.processedByRole = req.user.role;
+    }
+  }
+
   const saved = await booking.save();
 
   // Send Status Update Email
-  if (req.body.status) {
+  if (status) {
     const userData = await User.findById(saved.userId) || saved.guestDetails;
     if (userData && (userData.email || saved.guestDetails?.email)) {
       sendBookingUpdateEmail(saved, saved.status, userData).catch(err => console.error('Booking status update email failed:', err.message));
@@ -278,16 +330,47 @@ export const resolveRefundRequest = asyncHandler(async (req, res) => {
   res.json({ message: `Refund request ${status} successfully`, booking });
 });
 
+export const lookupGuestBooking = asyncHandler(async (req, res) => {
+  const { email, bookingNumber } = req.query;
+
+  if (!email || !bookingNumber) {
+    res.status(400);
+    throw new Error('Email and Booking Number are required');
+  }
+
+  const booking = await Booking.findOne({
+    bookingNumber: bookingNumber.toUpperCase(),
+    $or: [
+      { 'guestDetails.email': new RegExp(`^${email}$`, 'i') },
+      { userId: await User.findOne({ email: new RegExp(`^${email}$`, 'i') }).select('_id') }
+    ]
+  })
+    .populate('classId', 'title description image')
+    .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+    .populate('locationId', 'name address');
+
+  if (!booking) {
+    res.status(404);
+    throw new Error('Booking not found with these details');
+  }
+
+  res.json(booking);
+});
+
 export const deleteBooking = asyncHandler(async (req, res) => {
   const booking = await Booking.findById(req.params.id);
   if (!booking) {
     res.status(404);
     throw new Error('Booking not found');
   }
-  if (booking.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+  const isOwner = booking.userId && booking.userId.toString() === req.user._id.toString();
+  const isAdmin = ['admin', 'superadmin', 'store-manager', 'store-cashier'].includes(req.user.role);
+
+  if (!isOwner && !isAdmin) {
     res.status(403);
     throw new Error('Not allowed');
   }
+
   await booking.deleteOne();
   res.json({ message: 'Booking removed' });
 });
@@ -300,19 +383,59 @@ export const linkUserBookings = async (user) => {
   if (!user || !user.email) return;
 
   try {
+    const emailRegex = new RegExp(`^${user.email}$`, 'i');
+
     // 1. Link Bookings
     const bookingResult = await Booking.updateMany(
-      { userId: { $exists: false }, 'guestDetails.email': user.email },
+      { userId: { $exists: false }, 'guestDetails.email': emailRegex },
       { $set: { userId: user._id } }
     );
 
     // 2. Link SalesOrders
     const orderResult = await SalesOrder.updateMany(
-      { userId: { $exists: false }, 'guestDetails.email': user.email },
+      { userId: { $exists: false }, 'guestDetails.email': emailRegex },
       { $set: { userId: user._id } }
     );
 
-    console.log(`Linked ${bookingResult.modifiedCount} bookings and ${orderResult.modifiedCount} orders for ${user.email}`);
+    // 3. Link Payments
+    const linkedBookings = await Booking.find({ userId: user._id }).select('_id');
+    const bookingIds = linkedBookings.map(b => b._id);
+    const paymentResult = await Payment.updateMany(
+      { 
+        userId: { $exists: false }, 
+        $or: [
+          { 'guestDetails.email': emailRegex },
+          { bookingId: { $in: bookingIds } }
+        ]
+      },
+      { $set: { userId: user._id } }
+    );
+
+    // 4. Heal Missing Payments
+    // Find confirmed bookings for this user that are missing a Payment record
+    const bookingsMissingPayments = await Booking.find({
+      userId: user._id,
+      paymentStatus: 'completed'
+    });
+
+    let healedCount = 0;
+    for (const b of bookingsMissingPayments) {
+      const exists = await Payment.findOne({ bookingId: b._id });
+      if (!exists) {
+        await Payment.create({
+          userId: user._id,
+          bookingId: b._id,
+          amount: b.totalAmount,
+          paymentMethod: b.paymentMethod || 'online',
+          status: 'paid',
+          locationId: b.locationId,
+          createdAt: b.createdAt // Keep original date if possible
+        });
+        healedCount++;
+      }
+    }
+
+    console.log(`Linked ${bookingResult.modifiedCount} bookings, ${orderResult.modifiedCount} orders, ${paymentResult.modifiedCount} payments, and healed ${healedCount} missing payments for ${user.email}`);
   } catch (error) {
     console.error(`Error linking guest bookings for ${user.email}:`, error);
   }
