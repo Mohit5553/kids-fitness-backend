@@ -19,7 +19,9 @@ const userSchema = new mongoose.Schema(
     city: { type: String },
     country: { type: String, default: 'United Arab Emirates' },
     avatarUrl: { type: String },
-    points: { type: Number, default: 0 }
+    points: { type: Number, default: 0 },
+    resetPasswordToken: { type: String },
+    resetPasswordExpires: { type: Date }
   },
   { timestamps: true }
 );

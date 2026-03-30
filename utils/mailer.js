@@ -360,3 +360,32 @@ export async function sendTrialEmail(payload) {
     html
   });
 }
+
+export async function sendPasswordResetEmail(user, resetUrl) {
+  const html = `
+    <div style="${baseStyles}">
+      <div style="${headerStyles}">
+        <h1 style="margin:0; font-size: 24px;">Reset Your Password</h1>
+      </div>
+      <div style="${contentStyles}">
+        <p>Hi <strong>${user.firstName || user.name}</strong>,</p>
+        <p>You are receiving this email because you (or someone else) have requested a password reset for your account.</p>
+        <p>Please click the button below to complete the process. <strong>This link will expire in 1 hour.</strong></p>
+        <div style="text-align: center;">
+          <a href="${resetUrl}" style="${buttonStyles}">Reset Password</a>
+        </div>
+        <p>If you did not request this, please ignore this email and your password will remain unchanged.</p>
+        <p>Best regards,<br>The Kids Fitness Team</p>
+      </div>
+      <div style="${footerStyles}">
+        &copy; ${new Date().getFullYear()} Kids Fitness. All rights reserved.
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    to: user.email,
+    subject: 'Password Reset Request',
+    html
+  });
+}

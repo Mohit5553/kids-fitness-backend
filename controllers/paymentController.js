@@ -6,26 +6,82 @@ import Plan from '../models/Plan.js';
 import Membership from '../models/Membership.js';
 import User from '../models/User.js';
 import { toCsv } from '../utils/csv.js';
-import { resolveReadLocationId } from '../utils/locationScope.js';
+import { resolveReadLocationIds } from '../utils/locationScope.js';
 import { sendPaymentConfirmationEmail } from '../utils/mailer.js';
+import { linkUserBookings } from './bookingController.js';
+
+// Internal function to heal missing Payment records for any confirmed bookings
+const syncPayments = async (user = null) => {
+  try {
+    // 1. If user provided, run their guest linkage/healing first
+    if (user) {
+      await linkUserBookings(user);
+    }
+
+    // 2. Global Healing: Find ANY confirmed booking since March 24 missing a Payment record
+    // Using March 1st as a safe "recent" margin
+    const startDate = new Date('2026-03-01'); 
+    const missingBookings = await Booking.find({
+      paymentStatus: 'completed',
+      createdAt: { $gte: startDate }
+    });
+
+    for (const b of missingBookings) {
+      const exists = await Payment.findOne({ bookingId: b._id });
+      if (!exists) {
+        await Payment.create({
+          userId: b.userId,
+          bookingId: b._id,
+          amount: b.totalAmount,
+          paymentMethod: b.paymentMethod || 'online',
+          status: 'paid',
+          locationId: b.locationId,
+          createdAt: b.createdAt
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Payment sync/healing failed:', error);
+  }
+};
 
 export const getMyPayments = asyncHandler(async (req, res) => {
+  // Sync/Heal before fetching to ensure latest guest bookings are linked
+  await syncPayments(req.user);
+
   const payments = await Payment.find({ userId: req.user._id })
-    .populate('bookingId', 'status date')
+    .populate({
+      path: 'bookingId',
+      select: 'status date classId guestDetails',
+      populate: { path: 'classId', select: 'title' }
+    })
     .populate('planId', 'name price')
-    .populate('membershipId', 'status')
+    .populate({
+      path: 'membershipId',
+      populate: { path: 'planId', select: 'name' }
+    })
     .sort({ createdAt: -1 });
   res.json(payments);
 });
 
 export const getAllPayments = asyncHandler(async (req, res) => {
-  const locationId = resolveReadLocationId(req);
-  const filter = locationId ? { locationId } : {};
+  // Run global sync/healing for admin view
+  await syncPayments();
+
+  const locationIds = resolveReadLocationIds(req);
+  const filter = locationIds ? { locationId: { $in: locationIds } } : {};
   const payments = await Payment.find(filter)
     .populate('userId', 'name email')
-    .populate('bookingId', 'status date')
+    .populate({
+      path: 'bookingId',
+      select: 'status date classId guestDetails',
+      populate: { path: 'classId', select: 'title' }
+    })
     .populate('planId', 'name price')
-    .populate('membershipId', 'status')
+    .populate({
+      path: 'membershipId',
+      populate: { path: 'planId', select: 'name' }
+    })
     .sort({ createdAt: -1 });
   res.json(payments);
 });
@@ -121,10 +177,14 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
 });
 
 export const exportPaymentsCsv = asyncHandler(async (req, res) => {
-  const locationId = resolveReadLocationId(req);
-  const filter = locationId ? { locationId } : {};
+  const locationIds = resolveReadLocationIds(req);
+  const filter = locationIds ? { locationId: { $in: locationIds } } : {};
   const payments = await Payment.find(filter)
     .populate('userId', 'name email')
+    .populate({
+      path: 'bookingId',
+      populate: { path: 'classId', select: 'title' }
+    })
     .populate('planId', 'name price')
     .sort({ createdAt: -1 });
 
