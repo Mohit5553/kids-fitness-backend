@@ -1,11 +1,17 @@
 import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
+import Plan from '../models/Plan.js';
+import mongoose from 'mongoose';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getClasses = asyncHandler(async (req, res) => {
-  const { locationId: queryLocationId } = req.query;
+  const { locationId: queryLocationId, all } = req.query;
   const locationId = queryLocationId || resolveReadLocationId(req);
+  
   const filter = (locationId && locationId !== 'all') ? { locationId } : {};
+  if (all !== 'true') {
+    filter.status = 'active';
+  }
   const classes = await ClassModel.find(filter)
     .populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery')
     .sort({ createdAt: -1 });
@@ -68,10 +74,28 @@ export const deleteClass = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Class not found');
   }
+
+  // Dependency Check: Block ONLY if there are FUTURE scheduled sessions
+  const Session = mongoose.model('Session');
+  const futureSessionCount = await Session.countDocuments({ 
+    classId: classItem._id, 
+    startTime: { $gt: new Date() },
+    status: 'scheduled'
+  });
+  
+  if (futureSessionCount > 0) {
+    res.status(400);
+    throw new Error(`Cannot disable class: There are ${futureSessionCount} future sessions scheduled. Please cancel them first.`);
+  }
+
   if (req.user?.role === 'admin' && req.user.locationId && classItem.locationId?.toString() !== req.user.locationId.toString()) {
     res.status(403);
     throw new Error('Not allowed');
   }
-  await classItem.deleteOne();
-  res.json({ message: 'Class removed' });
+
+  // Toggle status instead of deleting
+  classItem.status = classItem.status === 'active' ? 'inactive' : 'active';
+  await classItem.save();
+
+  res.json({ message: `Class status updated to ${classItem.status}`, status: classItem.status });
 });

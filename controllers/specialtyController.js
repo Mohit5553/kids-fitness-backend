@@ -1,11 +1,13 @@
 import asyncHandler from 'express-async-handler';
 import Specialty from '../models/Specialty.js';
+import mongoose from 'mongoose';
 
 // @desc    Get all specialties
 // @route   GET /api/specialties
 // @access  Public
 export const getSpecialties = asyncHandler(async (req, res) => {
-  const specialties = await Specialty.find({}).sort({ name: 1 });
+  const query = req.query.all === 'true' ? {} : { status: 'active' };
+  const specialties = await Specialty.find(query).sort({ name: 1 });
   res.json(specialties);
 });
 
@@ -49,7 +51,7 @@ export const updateSpecialty = asyncHandler(async (req, res) => {
   res.json(updated);
 });
 
-// @desc    Delete a specialty
+// @desc    Toggle specialty status
 // @route   DELETE /api/specialties/:id
 // @access  Private/Admin
 export const deleteSpecialty = asyncHandler(async (req, res) => {
@@ -60,6 +62,23 @@ export const deleteSpecialty = asyncHandler(async (req, res) => {
     throw new Error('Specialty not found');
   }
 
-  await specialty.deleteOne();
-  res.json({ message: 'Specialty removed' });
+  // If trying to deactivate, check for active trainers
+  if (specialty.status === 'active') {
+    const Trainer = mongoose.model('Trainer');
+    const trainerCount = await Trainer.countDocuments({ 
+      specialties: specialty.name, 
+      status: 'active' 
+    });
+
+    if (trainerCount > 0) {
+      res.status(400);
+      throw new Error(`Cannot disable specialty: There are ${trainerCount} active trainers assigned to '${specialty.name}'. Please reassign them first.`);
+    }
+  }
+
+  // Toggle status
+  specialty.status = specialty.status === 'active' ? 'inactive' : 'active';
+  await specialty.save();
+
+  res.json({ message: `Specialty status updated to ${specialty.status}`, status: specialty.status });
 });

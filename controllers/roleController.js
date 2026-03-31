@@ -1,11 +1,13 @@
 import asyncHandler from 'express-async-handler';
 import Role from '../models/Role.js';
+import mongoose from 'mongoose';
 
 // @desc    Get all roles
 // @route   GET /api/roles
 // @access  Private/Admin
 export const getRoles = asyncHandler(async (req, res) => {
-  const roles = await Role.find({});
+  const query = req.query.all === 'true' ? {} : { status: 'active' };
+  const roles = await Role.find(query);
   res.json(roles);
 });
 
@@ -51,17 +53,34 @@ export const updateRole = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Delete a role
+// @desc    Toggle role status
 // @route   DELETE /api/roles/:id
 // @access  Private/Admin
 export const deleteRole = asyncHandler(async (req, res) => {
   const role = await Role.findById(req.params.id);
 
-  if (role) {
-    await Role.deleteOne({ _id: req.params.id });
-    res.json({ message: 'Role removed' });
-  } else {
+  if (!role) {
     res.status(404);
     throw new Error('Role not found');
   }
+
+  // If trying to deactivate, check for active users assigned to this role name
+  if (role.status === 'active') {
+    const User = mongoose.model('User');
+    const userCount = await User.countDocuments({ 
+      role: role.name, 
+      status: 'active' 
+    });
+
+    if (userCount > 0) {
+      res.status(400);
+      throw new Error(`Cannot disable role: There are ${userCount} active users assigned to the '${role.name}' role. Please reassign them first.`);
+    }
+  }
+
+  // Toggle status
+  role.status = role.status === 'active' ? 'inactive' : 'active';
+  await role.save();
+
+  res.json({ message: `Role status updated to ${role.status}`, status: role.status });
 });

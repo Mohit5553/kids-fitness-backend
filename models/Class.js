@@ -11,8 +11,8 @@ const classSchema = new mongoose.Schema(
     duration: { type: String },
     availableTrainers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' }],
     price: { type: Number, required: true },
-    capacity: { type: Number, default: 12 },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' }
   },
   { timestamps: true }
 );

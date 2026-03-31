@@ -41,7 +41,7 @@ export const checkIn = asyncHandler(async (req, res) => {
     }
     resolvedSessionId = booking.sessionId;
     resolvedLocationId = booking.locationId;
-    
+
     // If we're looking for a specific child but no childId provided, 
     // we assume the first participant or similar, but the frontend should provide the name.
   }

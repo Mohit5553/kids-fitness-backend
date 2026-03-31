@@ -16,13 +16,17 @@ export const getAllChildren = asyncHandler(async (req, res) => {
 });
 
 export const createChild = asyncHandler(async (req, res) => {
-  const { name, age, gender } = req.body;
+  const { name, age, gender, parentId } = req.body;
   if (!name || !age) {
     res.status(400);
     throw new Error('Name and age are required');
   }
+
+  const isAdminOrStaff = req.user.role !== 'parent' && req.user.role !== 'customer';
+  const finalParentId = (isAdminOrStaff && parentId) ? parentId : req.user._id;
+
   const locationId = resolveWriteLocationId(req);
-  const created = await Child.create({ parentId: req.user._id, name, age, gender, locationId });
+  const created = await Child.create({ parentId: finalParentId, name, age, gender, locationId });
   res.status(201).json(created);
 });
 

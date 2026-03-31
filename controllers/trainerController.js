@@ -1,6 +1,9 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
+import Session from '../models/Session.js';
 import Trainer from '../models/Trainer.js';
 import User from '../models/User.js';
+import Booking from '../models/Booking.js';
 import bcrypt from 'bcryptjs';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -33,7 +36,9 @@ const syncUserProfile = async (trainerData, password) => {
 
 export const getTrainers = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
+  const showAll = req.query.all === 'true';
   const filter = locationId ? { locationIds: locationId } : {};
+  if (!showAll) filter.status = 'active';
   const trainers = await Trainer.find(filter).sort({ createdAt: -1 });
   res.json(trainers);
 });
@@ -93,11 +98,24 @@ export const deleteTrainer = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Trainer not found');
   }
+
+  // Dependency Check: Check if trainer has any sessions (past or future)
+  const sessionCount = await Session.countDocuments({ trainerId: trainer._id });
+  
+  if (sessionCount > 0) {
+    res.status(400);
+    throw new Error(`Cannot disable/delete trainer: There are ${sessionCount} associated class sessions in the schedule.`);
+  }
+
   if (req.user?.role === 'admin' && req.user.locationId && !trainer.locationIds?.map(id => id.toString()).includes(req.user.locationId.toString())) {
     res.status(403);
     throw new Error('Not allowed');
   }
-  await trainer.deleteOne();
-  res.json({ message: 'Trainer removed' });
+
+  // Toggle status instead of deleting
+  trainer.status = trainer.status === 'active' ? 'inactive' : 'active';
+  await trainer.save();
+  
+  res.json({ message: `Trainer status updated to ${trainer.status}`, status: trainer.status });
 });
 

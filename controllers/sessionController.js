@@ -2,16 +2,24 @@ import asyncHandler from 'express-async-handler';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
 import Booking from '../models/Booking.js';
+import mongoose from 'mongoose';
 import { signQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId } from '../utils/locationScope.js';
 
+// @desc    Get all sessions with filters
+// @route   GET /api/sessions
+// @access  Private
 export const getSessions = asyncHandler(async (req, res) => {
-  const { start, end, classId, trainerId, locationId: queryLocationId } = req.query;
+  const { start, end, classId, trainerId, locationId: queryLocationId, trainerName, trainerEmail } = req.query;
   const filter = {};
+
+  // Visibility Logic: If we're searching for a specific trainer, we skip the location filter 
+  // so they can see all their assigned work. Otherwise, we restrict by location.
+  const isTrainerSpecificSearch = trainerId || trainerEmail || trainerName;
 
   if (queryLocationId) {
     filter.locationId = queryLocationId;
-  } else {
+  } else if (!isTrainerSpecificSearch) {
     const locationIds = resolveReadLocationIds(req);
     if (locationIds && locationIds.length > 0) {
       filter.locationId = { $in: locationIds };
@@ -29,13 +37,31 @@ export const getSessions = asyncHandler(async (req, res) => {
   }
 
   if (classId) filter.classId = classId;
-  if (trainerId) filter.trainerId = trainerId;
+  
+  if (trainerId) {
+    filter.trainerId = trainerId;
+  } else if (trainerEmail) {
+    // Robust fallback: verify the trainer's session list by their unique email ID
+    const userMatched = await mongoose.model('User').findOne({ email: trainerEmail });
+    if (userMatched) {
+      const trainerMatched = await mongoose.model('Trainer').findOne({ userId: userMatched._id });
+      if (trainerMatched) {
+        filter.trainerId = trainerMatched._id;
+      }
+    }
+  } else if (trainerName) {
+    // Secondary fallback: Name-based fuzzy search
+    const trainers = await mongoose.model('Trainer').find({ name: { $regex: new RegExp(trainerName, 'i') } });
+    if (trainers.length > 0) {
+      filter.trainerId = { $in: trainers.map(t => t._id) };
+    }
+  }
 
   const sessions = await Session.find(filter)
     .populate('classId', 'title ageGroup duration price minAge maxAge')
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
-    .sort({ createdAt: -1 });
+    .sort({ startTime: 1 }); // Changed to sort by start time ascending for dashboard clarity
 
   // Add bookingsCount to each session
   const sessionsWithCounts = await Promise.all(
@@ -54,6 +80,9 @@ export const getSessions = asyncHandler(async (req, res) => {
   res.json(sessionsWithCounts);
 });
 
+// @desc    Get session by ID
+// @route   GET /api/sessions/:id
+// @access  Private
 export const getSessionById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
@@ -61,6 +90,7 @@ export const getSessionById = asyncHandler(async (req, res) => {
     .populate('classId', 'title ageGroup duration price minAge maxAge')
     .populate('trainerId', 'name')
     .populate('locationId', 'name');
+    
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
@@ -93,8 +123,12 @@ const checkTrainerConflict = async (res, trainerId, startTime, endTime, sessionI
   }
 };
 
+// @desc    Create a new session
+// @route   POST /api/sessions
+// @access  Private/Admin
 export const createSession = asyncHandler(async (req, res) => {
   let { classId, trainerId, startTime, endTime, capacity, location, status } = req.body;
+  
   if (!classId || !startTime) {
     res.status(400);
     throw new Error('classId and startTime are required');
@@ -130,7 +164,7 @@ export const createSession = asyncHandler(async (req, res) => {
     endTime: end,
     capacity: capacity ?? classItem.capacity,
     location,
-    status,
+    status: status || 'scheduled',
     locationId
   });
 
@@ -144,15 +178,14 @@ export const createSession = asyncHandler(async (req, res) => {
   res.status(201).json(created);
 });
 
+// @desc    Update session
+// @route   PUT /api/sessions/:id
+// @access  Private/Admin
 export const updateSession = asyncHandler(async (req, res) => {
   const session = await Session.findById(req.params.id);
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
-  }
-  if (req.user?.role === 'admin' && req.user.locationId && session.locationId?.toString() !== req.user.locationId.toString()) {
-    res.status(403);
-    throw new Error('Not allowed');
   }
 
   const updateData = { ...req.body };
@@ -186,20 +219,36 @@ export const updateSession = asyncHandler(async (req, res) => {
   res.json(saved);
 });
 
+// @desc    Cancel/Restore session
+// @route   DELETE /api/sessions/:id
+// @access  Private/Admin
 export const deleteSession = asyncHandler(async (req, res) => {
   const session = await Session.findById(req.params.id);
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
   }
-  if (req.user?.role === 'admin' && req.user.locationId && session.locationId?.toString() !== req.user.locationId.toString()) {
-    res.status(403);
-    throw new Error('Not allowed');
+
+  // Dependency Check: Check for active Bookings or Attendance
+  const bookingCount = await Booking.countDocuments({ sessionId: session._id, status: { $ne: 'cancelled' } });
+  const Attendance = mongoose.model('Attendance');
+  const attendanceCount = await Attendance.countDocuments({ sessionId: session._id });
+
+  if (bookingCount > 0 || attendanceCount > 0) {
+    res.status(400);
+    throw new Error(`Cannot cancel/delete session: It has ${bookingCount} active bookings and ${attendanceCount} attendance records.`);
   }
-  await session.deleteOne();
-  res.json({ message: 'Session removed' });
+
+  // Toggle status instead of deleting
+  session.status = session.status === 'scheduled' ? 'cancelled' : 'scheduled';
+  await session.save();
+
+  res.json({ message: `Session status updated to ${session.status}`, status: session.status });
 });
 
+// @desc    Get Session QR Token
+// @route   GET /api/sessions/:id/qr
+// @access  Private/Admin
 export const getSessionQr = asyncHandler(async (req, res) => {
   const session = await Session.findById(req.params.id);
   if (!session) {
@@ -208,4 +257,88 @@ export const getSessionQr = asyncHandler(async (req, res) => {
   }
   const token = signQrToken({ sessionId: session._id, locationId: session.locationId });
   res.json({ token });
+});
+
+// @desc    Bulk create sessions
+// @route   POST /api/sessions/bulk
+// @access  Private/Admin
+export const bulkCreateSessions = asyncHandler(async (req, res) => {
+  const { sessions: sessionsData } = req.body;
+  if (!sessionsData || !Array.isArray(sessionsData)) {
+    res.status(400);
+    throw new Error('An array of sessions is required');
+  }
+
+  const results = [];
+  for (const sessionData of sessionsData) {
+    try {
+      const { classId, trainerId, startTime, endTime, capacity, location, locationId: bodyLocationId } = sessionData;
+
+      if (!classId || !startTime) {
+        throw new Error('classId and startTime are required');
+      }
+
+      const classItem = await ClassModel.findById(classId);
+      if (!classItem) {
+        throw new Error(`Class ${classId} not found`);
+      }
+
+      const start = new Date(startTime);
+      let end = endTime ? new Date(endTime) : null;
+
+      if (!end && classItem.duration) {
+        const durationMinutes = parseInt(classItem.duration) || 60;
+        end = new Date(start.getTime() + durationMinutes * 60000);
+      }
+
+      // Conflict Check
+      if (trainerId) {
+        const query = {
+          trainerId,
+          status: 'scheduled',
+          $or: [
+            { startTime: { $lt: end, $gte: start } },
+            { endTime: { $gt: start, $lte: end } },
+            { startTime: { $lte: start }, endTime: { $gte: end } }
+          ]
+        };
+        const conflict = await Session.findOne(query).populate('classId', 'title');
+        if (conflict) {
+          throw new Error(`Trainer conflict: "${conflict.classId?.title || 'Another session'}"`);
+        }
+      }
+
+      const locationId = bodyLocationId || resolveWriteLocationId(req) || classItem.locationId;
+      if (!locationId) {
+        throw new Error('Location is required');
+      }
+
+      const created = await Session.create({
+        classId,
+        trainerId,
+        startTime: start,
+        endTime: end,
+        capacity: capacity ?? classItem.capacity,
+        location,
+        status: 'scheduled',
+        locationId
+      });
+
+      if (trainerId) {
+        await ClassModel.findByIdAndUpdate(classId, {
+          $addToSet: { availableTrainers: trainerId }
+        });
+      }
+
+      results.push({ success: true, session: created });
+    } catch (error) {
+      results.push({ success: false, error: error.message, data: sessionData });
+    }
+  }
+
+  const successCount = results.filter(r => r.success).length;
+  res.status(201).json({
+    message: `${successCount} out of ${sessionsData.length} sessions created.`,
+    results
+  });
 });

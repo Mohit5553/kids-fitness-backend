@@ -20,8 +20,11 @@ const userSchema = new mongoose.Schema(
     country: { type: String, default: 'United Arab Emirates' },
     avatarUrl: { type: String },
     points: { type: Number, default: 0 },
+    isCorporate: { type: Boolean, default: false },
+    companyName: { type: String },
     resetPasswordToken: { type: String },
-    resetPasswordExpires: { type: Date }
+    resetPasswordExpires: { type: Date },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' }
   },
   { timestamps: true }
 );
