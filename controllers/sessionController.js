@@ -10,8 +10,12 @@ import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId }
 // @route   GET /api/sessions
 // @access  Private
 export const getSessions = asyncHandler(async (req, res) => {
-  const { start, end, classId, trainerId, locationId: queryLocationId, trainerName, trainerEmail } = req.query;
+  const { start, end, classId, trainerId, locationId: queryLocationId, trainerName, trainerEmail, all } = req.query;
   const filter = {};
+
+  if (!all) {
+    filter.status = 'scheduled';
+  }
 
   // Visibility Logic: If we're searching for a specific trainer, we skip the location filter 
   // so they can see all their assigned work. Otherwise, we restrict by location.
@@ -221,7 +225,7 @@ export const updateSession = asyncHandler(async (req, res) => {
 
 // @desc    Cancel/Restore session
 // @route   DELETE /api/sessions/:id
-// @access  Private/Admin
+// @access  Private
 export const deleteSession = asyncHandler(async (req, res) => {
   const session = await Session.findById(req.params.id);
   if (!session) {
@@ -229,21 +233,58 @@ export const deleteSession = asyncHandler(async (req, res) => {
     throw new Error('Session not found');
   }
 
-  // Dependency Check: Check for active Bookings or Attendance
-  const bookingCount = await Booking.countDocuments({ sessionId: session._id, status: { $ne: 'cancelled' } });
-  const Attendance = mongoose.model('Attendance');
-  const attendanceCount = await Attendance.countDocuments({ sessionId: session._id });
-
-  if (bookingCount > 0 || attendanceCount > 0) {
-    res.status(400);
-    throw new Error(`Cannot cancel/delete session: It has ${bookingCount} active bookings and ${attendanceCount} attendance records.`);
+  // Permission Check: Admin or the Trainer assigned to the session
+  const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+  let isAssignedTrainer = false;
+  
+  if (req.user.role === 'trainer') {
+    const trainer = await mongoose.model('Trainer').findOne({ userId: req.user._id });
+    if (trainer && session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
+      isAssignedTrainer = true;
+    }
   }
 
-  // Toggle status instead of deleting
-  session.status = session.status === 'scheduled' ? 'cancelled' : 'scheduled';
-  await session.save();
+  if (!isAdmin && !isAssignedTrainer) {
+    res.status(403);
+    throw new Error('Not authorized to cancel this session');
+  }
 
-  res.json({ message: `Session status updated to ${session.status}`, status: session.status });
+  const { reason } = req.body;
+
+  // Toggle status instead of deleting
+  if (session.status === 'scheduled') {
+    // Attempting to cancel
+    session.status = 'cancelled';
+    session.cancellationReason = reason || 'No reason provided';
+    session.cancelledBy = req.user._id;
+    session.cancelledAt = new Date();
+
+    // Sync status to related bookings
+    const BookingModel = mongoose.model('Booking');
+    await BookingModel.updateMany(
+      { sessionId: session._id, status: { $in: ['confirmed', 'pending', 'attended'] } },
+      { 
+        $set: { 
+          status: 'cancelled', 
+          cancellationReason: `Session cancelled: ${session.cancellationReason}` 
+        } 
+      }
+    );
+  } else {
+    // Attempting to restore
+    // Handle restoration safety (optional capacity check if logic requires it)
+    session.status = 'scheduled';
+    session.cancellationReason = undefined;
+    session.cancelledBy = undefined;
+    session.cancelledAt = undefined;
+  }
+  
+  const saved = await session.save();
+  res.json({ 
+    message: `Session status updated to ${saved.status}`, 
+    status: saved.status,
+    cancellationReason: saved.cancellationReason 
+  });
 });
 
 // @desc    Get Session QR Token

@@ -8,7 +8,13 @@ import { resolveReadLocationId } from '../utils/locationScope.js';
 export const getMyAttendance = asyncHandler(async (req, res) => {
   const attendance = await Attendance.find({ userId: req.user._id })
     .populate('childId', 'name age')
-    .populate({ path: 'sessionId', populate: { path: 'classId', select: 'title' } })
+    .populate({ 
+      path: 'sessionId', 
+      populate: [
+        { path: 'classId', select: 'title' },
+        { path: 'trainerId', select: 'name' }
+      ] 
+    })
     .sort({ createdAt: -1 });
   res.json(attendance);
 });
@@ -19,7 +25,13 @@ export const getAllAttendance = asyncHandler(async (req, res) => {
   const attendance = await Attendance.find(filter)
     .populate('userId', 'name email')
     .populate('childId', 'name age')
-    .populate({ path: 'sessionId', populate: { path: 'classId', select: 'title' } })
+    .populate({ 
+      path: 'sessionId', 
+      populate: [
+        { path: 'classId', select: 'title' },
+        { path: 'trainerId', select: 'name' }
+      ] 
+    })
     .sort({ createdAt: -1 });
   res.json(attendance);
 });

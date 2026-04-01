@@ -29,7 +29,7 @@ export const getSummary = asyncHandler(async (req, res) => {
   ] = await Promise.all([
     ClassModel.countDocuments(locationFilter),
     Trainer.countDocuments(locationFilter),
-    Session.countDocuments({ ...locationFilter, startTime: { $gte: now } }),
+    Session.countDocuments({ ...locationFilter, status: { $ne: 'cancelled' }, startTime: { $gte: now } }),
     Booking.aggregate([
       ...(locationId ? [{ $match: { locationId } }] : []),
       { $group: { _id: '$status', count: { $sum: 1 } } }

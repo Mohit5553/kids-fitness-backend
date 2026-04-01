@@ -10,6 +10,9 @@ const sessionSchema = new mongoose.Schema(
     bookedParticipants: { type: Number, default: 0 },
     location: { type: String },
     status: { type: String, enum: ['scheduled', 'cancelled'], default: 'scheduled' },
+    cancellationReason: { type: String },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    cancelledAt: { type: Date },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
   },
   { timestamps: true }

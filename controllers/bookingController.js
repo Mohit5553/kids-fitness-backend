@@ -9,6 +9,7 @@ import { sendBookingConfirmationEmail, sendBookingUpdateEmail } from '../utils/m
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import Invoice from '../models/Invoice.js';
+import Attendance from '../models/Attendance.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -24,9 +25,18 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
-  const locationId = resolveReadLocationId(req);
   const { sessionId, trainerId } = req.query;
-  const filter = locationId ? { locationId } : {};
+  
+  // Visibility Logic: If we're searching for a specific session or trainer, we skip the location filter 
+  // so admins and trainers can see their work across all branches.
+  const isDirectLookup = sessionId || trainerId;
+  const filter = {};
+
+  if (!isDirectLookup) {
+    const locationId = resolveReadLocationId(req);
+    if (locationId) filter.locationId = locationId;
+  }
+
   if (sessionId) {
     filter.sessionId = sessionId;
   } else if (trainerId) {
@@ -333,6 +343,39 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
       attendedAt: new Date(), 
       attendedBy: req.user?._id 
     };
+
+    // Auto-create Attendance records for Admin clarity
+    if (booking.sessionId) {
+      for (const p of booking.participants) {
+        try {
+          const filter = { 
+            sessionId: booking.sessionId, 
+            bookingId: booking._id 
+          };
+          
+          if (p.childId) {
+            filter.childId = p.childId;
+          } else {
+            filter.participantName = p.name;
+          }
+
+          await Attendance.findOneAndUpdate(
+            filter,
+            {
+              ...filter,
+              userId: booking.userId,
+              locationId: booking.locationId,
+              status: 'present',
+              method: 'manual',
+              checkedInAt: new Date()
+            },
+            { upsert: true, new: true }
+          );
+        } catch (err) {
+          console.error('[Attendance Sync] Failed to create record:', err.message);
+        }
+      }
+    }
   }
 
   if (status === 'completed') {

@@ -27,6 +27,7 @@ const bookingSchema = new mongoose.Schema(
     paymentMethod: { type: String, default: 'center' },
     paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
     paymentReference: { type: String },
+    cancellationReason: { type: String },
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     paymentDate: { type: Date },
     processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
