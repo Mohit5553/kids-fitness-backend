@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
 import Trainer from '../models/Trainer.js';
 import Child from '../models/Child.js';
+import mongoose from 'mongoose';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendAccountUpdateEmail } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
@@ -94,8 +95,26 @@ export const deleteUser = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('User not found');
   }
-  await user.deleteOne();
-  res.json({ message: 'User removed' });
+
+  // Dependency Check: ONLY block if there are ACTIVE or FUTURE commitments.
+  const Booking = mongoose.model('Booking');
+  const Membership = mongoose.model('Membership');
+
+  const [futureBookingCount, activeMembershipCount] = await Promise.all([
+    Booking.countDocuments({ userId: user._id, date: { $gt: new Date() }, status: 'confirmed' }),
+    Membership.countDocuments({ userId: user._id, endDate: { $gt: new Date() } })
+  ]);
+
+  if (futureBookingCount > 0 || activeMembershipCount > 0) {
+    res.status(400);
+    throw new Error(`Cannot deactivate user: They have ${futureBookingCount} future bookings and ${activeMembershipCount} active memberships. Please cancel these before deactivating.`);
+  }
+
+  // Toggle status
+  user.status = user.status === 'active' ? 'inactive' : 'active';
+  await user.save();
+
+  res.json({ message: `User status updated to ${user.status}`, status: user.status });
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
@@ -132,4 +151,96 @@ export const createStaff = asyncHandler(async (req, res) => {
 export const getUserChildren = asyncHandler(async (req, res) => {
   const children = await Child.find({ parentId: req.params.id });
   res.json(children);
+});
+
+export const lookupUser = asyncHandler(async (req, res) => {
+  const { query } = req.query; // email or phone
+  if (!query) {
+    res.status(400);
+    throw new Error('Search query is required');
+  }
+
+  const user = await User.findOne({
+    $or: [
+      { email: new RegExp(`^${query}$`, 'i') },
+      { phone: query }
+    ]
+  }).select('-password');
+
+  if (!user) {
+    return res.status(404).json({ message: 'User not found' });
+  }
+
+  const children = await Child.find({ parentId: user._id });
+  res.json({ user, children });
+});
+
+export const createWalkingCustomer = asyncHandler(async (req, res) => {
+  const { name, email, phone, children } = req.body;
+
+  if (!name || (!email && !phone)) {
+    res.status(400);
+    throw new Error('Name and at least one contact method (email or phone) is required');
+  }
+
+  let user;
+  if (email) {
+    user = await User.findOne({ email: new RegExp(`^${email}$`, 'i') });
+  } else if (phone) {
+    user = await User.findOne({ phone });
+  }
+
+  if (!user) {
+    // Generate a secure random password for the walking customer
+    const tempPassword = Math.random().toString(36).substring(2, 10);
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(tempPassword, salt);
+
+    user = await User.create({
+      name,
+      email: email || undefined,
+      phone,
+      password: hashedPassword,
+      role: 'parent',
+      status: 'active',
+      locationIds: req.user.locationIds || []
+    });
+  } else {
+    // Update existing user details if provided and missing
+    if (name) user.name = name;
+    if (phone) user.phone = phone;
+    await user.save();
+  }
+
+  // Handle children if provided
+  const createdChildren = [];
+  if (children && Array.isArray(children)) {
+    for (const childData of children) {
+      if (childData._id) {
+        // Existing child update? Or just skip if already added
+        continue;
+      }
+      const newChild = await Child.create({
+        parentId: user._id,
+        name: childData.name,
+        age: childData.age,
+        gender: childData.gender || 'male',
+        locationId: req.user.locationIds && req.user.locationIds.length > 0 ? req.user.locationIds[0] : undefined
+      });
+      createdChildren.push(newChild);
+    }
+  }
+
+  const allChildren = await Child.find({ parentId: user._id });
+
+  res.status(201).json({
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role
+    },
+    children: allChildren
+  });
 });

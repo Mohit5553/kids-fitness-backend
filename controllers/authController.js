@@ -137,6 +137,12 @@ export const loginUser = asyncHandler(async (req, res) => {
     throw new Error('Invalid credentials');
   }
 
+  // Check Account Status
+  if (user.status === 'inactive') {
+    res.status(401);
+    throw new Error('This account has been deactivated. Please contact support.');
+  }
+
   // Ensure any guest bookings made with this email are linked
   await linkUserBookings(user);
 

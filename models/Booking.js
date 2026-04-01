@@ -22,17 +22,29 @@ const bookingSchema = new mongoose.Schema(
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session' },
     date: { type: Date, required: true },
     totalAmount: { type: Number, required: true },
-    status: { type: String, enum: ['pending', 'confirmed', 'cancelled'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'confirmed', 'attended', 'cancelled', 'completed'], default: 'pending' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     paymentMethod: { type: String, default: 'center' },
     paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
     paymentReference: { type: String },
+    cancellationReason: { type: String },
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     paymentDate: { type: Date },
     processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     processedByRole: { type: String },
     refundStatus: { type: String, enum: ['none', 'requested', 'refunded', 'declined'], default: 'none' },
-    refundRejectionReason: { type: String }
+    refundRejectionReason: { type: String },
+    isCorporate: { type: Boolean, default: false },
+    corporateName: { type: String },
+    groupId: { type: String, index: true },
+    lifecycle: {
+      paidAt: Date,
+      paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      attendedAt: Date,
+      attendedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      finalizedAt: Date,
+      finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    }
   },
   { timestamps: true }
 );

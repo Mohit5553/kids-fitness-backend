@@ -35,6 +35,7 @@ import trialRoutes from './routes/trialRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import specialtyRoutes from './routes/specialtyRoutes.js';
 import roleRoutes from './routes/roleRoutes.js';
+import invoiceRoutes from './routes/invoiceRoutes.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -97,6 +98,7 @@ app.use('/api/trials', trialRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/specialties', specialtyRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/invoices', invoiceRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

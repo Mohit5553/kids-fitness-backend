@@ -5,7 +5,8 @@ import {
   createSession,
   updateSession,
   deleteSession,
-  getSessionQr
+  getSessionQr,
+  bulkCreateSessions
 } from '../controllers/sessionController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
@@ -15,7 +16,8 @@ router.get('/', getSessions);
 router.get('/:id', getSessionById);
 router.post('/', protect, adminOnly, createSession);
 router.put('/:id', protect, adminOnly, updateSession);
-router.delete('/:id', protect, adminOnly, deleteSession);
+router.delete('/:id', protect, deleteSession);
+router.post('/bulk', protect, adminOnly, bulkCreateSessions);
 router.get('/:id/qr', protect, adminOnly, getSessionQr);
 
 export default router;

@@ -1,5 +1,5 @@
 import express from 'express';
-import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren } from '../controllers/userController.js';
+import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren, lookupUser, createWalkingCustomer } from '../controllers/userController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -7,6 +7,9 @@ const router = express.Router();
 router.route('/')
   .get(protect, adminOnly, getUsers)
   .post(protect, adminOnly, createStaff);
+
+router.get('/lookup', protect, adminOnly, lookupUser);
+router.post('/walking', protect, adminOnly, createWalkingCustomer);
 
 router.route('/:id')
   .get(protect, adminOnly, getUserById)

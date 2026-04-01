@@ -84,8 +84,26 @@ export const deleteLocation = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Location not found');
   }
-  await location.deleteOne();
-  res.json({ message: 'Location removed' });
+
+  // Dependency Check: Block if active Classes or scheduled Sessions are linked.
+  const ClassModel = mongoose.model('Class');
+  const Session = mongoose.model('Session');
+
+  const [classCount, sessionCount] = await Promise.all([
+    ClassModel.countDocuments({ locationId: location._id, status: 'active' }),
+    Session.countDocuments({ locationId: location._id, status: 'scheduled' })
+  ]);
+
+  if (classCount > 0 || sessionCount > 0) {
+    res.status(400);
+    throw new Error(`Cannot disable branch: There are ${classCount} active classes and ${sessionCount} scheduled sessions at this location. Please reassign or cancel them first.`);
+  }
+
+  // Toggle status
+  location.status = location.status === 'active' ? 'inactive' : 'active';
+  await location.save();
+
+  res.json({ message: `Branch status updated to ${location.status}`, status: location.status });
 });
 
 export const getMyLocation = asyncHandler(async (req, res) => {
