@@ -1,14 +1,13 @@
 import asyncHandler from 'express-async-handler';
 import Invoice from '../models/Invoice.js';
 import Booking from '../models/Booking.js';
+import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
 
 /**
  * Helper to generate a missing invoice for a booking
  */
 const generateInvoiceFromBooking = async (booking) => {
-  const invYear = new Date().getFullYear();
-  const invRandom = Math.floor(1000 + Math.random() * 9000);
-  const invoiceNumber = `INV-${invYear}-${invRandom}`;
+  const invoiceNumber = await getNextInvoiceNumber();
 
   await booking.populate('classId', 'title price');
 
@@ -90,6 +89,12 @@ export const getInvoiceById = asyncHandler(async (req, res) => {
     throw new Error('Not authorized');
   }
 
+  // HEALING LOGIC: Sync invoice status with booking status (handles historical mismatches)
+  if (invoice.bookingId && ['cancelled', 'refunded'].includes(invoice.bookingId.status) && invoice.status === 'paid') {
+    invoice.status = 'cancelled';
+    await invoice.save();
+  }
+
   res.json(invoice);
 });
 
@@ -138,6 +143,12 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
     console.log(`[DEBUG] isStaff: ${isStaff}, isOwner: ${isOwner}, isUserEmailMatch: ${isUserEmailMatch}, isGuestOwner: ${isGuestOwner}`);
     res.status(403);
     throw new Error('Not authorized');
+  }
+
+  // HEALING LOGIC: Sync invoice status with booking status (handles historical mismatches)
+  if (invoice.bookingId && ['cancelled', 'refunded'].includes(invoice.bookingId.status) && invoice.status === 'paid') {
+    invoice.status = 'cancelled';
+    await invoice.save();
   }
 
   res.json(invoice);

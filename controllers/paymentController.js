@@ -5,6 +5,7 @@ import ClassModel from '../models/Class.js';
 import Plan from '../models/Plan.js';
 import Membership from '../models/Membership.js';
 import User from '../models/User.js';
+import Invoice from '../models/Invoice.js';
 import { toCsv } from '../utils/csv.js';
 import { resolveReadLocationIds } from '../utils/locationScope.js';
 import { sendPaymentConfirmationEmail } from '../utils/mailer.js';
@@ -27,17 +28,35 @@ const syncPayments = async (user = null) => {
     });
 
     for (const b of missingBookings) {
-      const exists = await Payment.findOne({ bookingId: b._id });
+      // Heal Payment records
+      const exists = await Payment.findOne({ 
+        $or: [
+          { bookingId: b._id },
+          { groupId: b.groupId }
+        ].filter(cond => cond.groupId !== undefined || cond.bookingId !== undefined)
+      });
+
       if (!exists) {
         await Payment.create({
           userId: b.userId,
           bookingId: b._id,
+          groupId: b.groupId,
           amount: b.totalAmount,
           paymentMethod: b.paymentMethod || 'online',
           status: 'paid',
           locationId: b.locationId,
           createdAt: b.createdAt
         });
+      } else if (exists.status === 'pending') {
+        exists.status = 'paid';
+        await exists.save();
+      }
+
+      // Heal Invoice records: Ensure confirmed bookings have 'paid' invoices
+      const invoiceRec = await Invoice.findOne({ bookingId: b._id });
+      if (invoiceRec && invoiceRec.status === 'unpaid') {
+        invoiceRec.status = 'paid';
+        await invoiceRec.save();
       }
     }
   } catch (error) {
@@ -52,8 +71,10 @@ export const getMyPayments = asyncHandler(async (req, res) => {
   const payments = await Payment.find({ userId: req.user._id })
     .populate({
       path: 'bookingId',
-      select: 'status date classId guestDetails',
-      populate: { path: 'classId', select: 'title' }
+      populate: [
+        { path: 'classId', select: 'title price' },
+        { path: 'sessionId', select: 'startTime endTime' }
+      ]
     })
     .populate('planId', 'name price')
     .populate({
@@ -61,7 +82,17 @@ export const getMyPayments = asyncHandler(async (req, res) => {
       populate: { path: 'planId', select: 'name' }
     })
     .sort({ createdAt: -1 });
-  res.json(payments);
+
+  const withInvoices = await Promise.all(payments.map(async (p) => {
+    const pObj = p.toObject();
+    if (p.bookingId) {
+      const inv = await Invoice.findOne({ bookingId: p.bookingId._id }).select('invoiceNumber status amount');
+      pObj.invoice = inv;
+    }
+    return pObj;
+  }));
+
+  res.json(withInvoices);
 });
 
 export const getAllPayments = asyncHandler(async (req, res) => {
@@ -74,8 +105,10 @@ export const getAllPayments = asyncHandler(async (req, res) => {
     .populate('userId', 'name email')
     .populate({
       path: 'bookingId',
-      select: 'status date classId guestDetails',
-      populate: { path: 'classId', select: 'title' }
+      populate: [
+        { path: 'classId', select: 'title price' },
+        { path: 'sessionId', select: 'startTime endTime' }
+      ]
     })
     .populate('planId', 'name price')
     .populate({
@@ -83,7 +116,17 @@ export const getAllPayments = asyncHandler(async (req, res) => {
       populate: { path: 'planId', select: 'name' }
     })
     .sort({ createdAt: -1 });
-  res.json(payments);
+
+  const withInvoices = await Promise.all(payments.map(async (p) => {
+    const pObj = p.toObject();
+    if (p.bookingId) {
+      const inv = await Invoice.findOne({ bookingId: p.bookingId._id }).select('invoiceNumber status amount');
+      pObj.invoice = inv;
+    }
+    return pObj;
+  }));
+
+  res.json(withInvoices);
 });
 
 export const createPayment = asyncHandler(async (req, res) => {
@@ -164,8 +207,14 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
   booking.paymentReference = reference;
   booking.paymentId = created._id;
   booking.paymentDate = new Date();
-  booking.paymentDate = new Date();
   await booking.save();
+
+  // Sync Invoice Status: Mark official invoice as paid
+  const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+  if (invoiceRec) {
+    invoiceRec.status = 'paid';
+    await invoiceRec.save();
+  }
 
   // Notify User
   const userData = await User.findById(created.userId);

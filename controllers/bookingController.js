@@ -10,6 +10,9 @@ import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import Invoice from '../models/Invoice.js';
 import Attendance from '../models/Attendance.js';
+import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
+import Membership from '../models/Membership.js';
+import Child from '../models/Child.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -25,16 +28,21 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
-  const { sessionId, trainerId } = req.query;
+  const { sessionId, trainerId, userId, childId } = req.query;
   
   // Visibility Logic: If we're searching for a specific session or trainer, we skip the location filter 
   // so admins and trainers can see their work across all branches.
-  const isDirectLookup = sessionId || trainerId;
+  const isDirectLookup = sessionId || trainerId || userId || childId;
   const filter = {};
+  
+  if (userId) filter.userId = userId;
+  if (childId) filter['participants.childId'] = childId;
 
   if (!isDirectLookup) {
     const locationId = resolveReadLocationId(req);
-    if (locationId) filter.locationId = locationId;
+    if (locationId && locationId !== 'all') {
+      filter.$or = [{ locationId }, { locationId: null }];
+    }
   }
 
   if (sessionId) {
@@ -48,6 +56,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     .populate('userId', 'name email')
     .populate('processedBy', 'name email')
     .populate('classId', 'title price')
+    .populate('planId', 'name price validity')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .populate('participants.childId', 'name age gender')
     .sort({ createdAt: -1 });
@@ -60,6 +69,34 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   }
   if (groupId) {
     filtered = filtered.filter(b => b.groupId === groupId);
+  }
+
+  // If sessionId is provided AND it belongs to a membership, we add that member to the participant list
+  if (sessionId) {
+      const targetSession = await Session.findById(sessionId);
+      if (targetSession && targetSession.membershipId) {
+          const membership = await Membership.findById(targetSession.membershipId).populate('userId', 'name email').populate('childId');
+          if (membership) {
+              const virtualBooking = {
+                  _id: `MR-${membership._id}`,
+                  bookingNumber: `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
+                  bookingType: 'package',
+                  userId: membership.userId,
+                  participants: membership.childId ? [{
+                      name: membership.childId.name,
+                      age: membership.childId.age,
+                      gender: membership.childId.gender,
+                      relation: 'Child',
+                      childId: membership.childId._id
+                  }] : [],
+                  status: 'confirmed',
+                  paymentStatus: 'completed',
+                  createdAt: membership.createdAt,
+                  isVirtualMembership: true
+              };
+              filtered.unshift(virtualBooking);
+          }
+      }
   }
 
   res.json(filtered);
@@ -189,9 +226,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   const created = await Booking.create(bookingData);
 
   // OFFICIAL INVOICE GENERATION
-  const invYear = new Date().getFullYear();
-  const invRandom = Math.floor(1000 + Math.random() * 9000);
-  const invoiceNumber = `INV-${invYear}-${invRandom}`;
+  const invoiceNumber = await getNextInvoiceNumber();
 
   const invoiceData = {
     invoiceNumber,
@@ -323,7 +358,14 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     };
 
     // Sync status and transaction specifics back to Payment record
-    const payRec = await Payment.findOne({ bookingId: booking._id });
+    // Try to find payment by bookingId or groupId
+    const payRec = await Payment.findOne({ 
+      $or: [
+        { bookingId: booking._id },
+        { groupId: booking.groupId }
+      ].filter(cond => cond.groupId !== undefined || cond.bookingId !== undefined)
+    });
+    
     if (payRec) {
       payRec.status = 'paid';
       const finalMethod = paymentMethod ? `center_${paymentMethod}` : 'center';
@@ -334,6 +376,22 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
       // Also update booking's specific payment details
       booking.paymentMethod = finalMethod;
       booking.paymentReference = reference;
+    }
+
+    // Sync Invoice Status: Ensure official invoice is marked as paid
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'paid';
+      await invoiceRec.save();
+    }
+  }
+
+  if (status === 'cancelled') {
+    // Sync Invoice Status: Ensure official invoice is marked as cancelled
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'cancelled';
+      await invoiceRec.save();
     }
   }
 
@@ -451,6 +509,13 @@ export const resolveRefundRequest = asyncHandler(async (req, res) => {
   if (status === 'refunded') {
     booking.refundStatus = 'refunded';
     booking.status = 'cancelled';
+
+    // Sync Invoice Status: Mark invoice as cancelled upon refund
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'cancelled';
+      await invoiceRec.save();
+    }
   } else if (status === 'declined') {
     if (!reason) {
       res.status(400);
@@ -689,9 +754,7 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
       await session.save();
 
       // INVOICE GENERATION for each booking in the group
-      const invYear = new Date().getFullYear();
-      const invRandom = Math.floor(1000 + Math.random() * 9000);
-      const invoiceNumber = `INV-${invYear}-${invRandom}`;
+      const invoiceNumber = await getNextInvoiceNumber();
 
       await Invoice.create({
         invoiceNumber,

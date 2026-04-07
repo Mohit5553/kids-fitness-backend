@@ -4,6 +4,8 @@ const paymentSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
+    groupId: { type: String },
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'SalesOrder' },
     planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
     amount: { type: Number, required: true },

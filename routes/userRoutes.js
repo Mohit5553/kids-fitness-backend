@@ -1,5 +1,5 @@
 import express from 'express';
-import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren, lookupUser, createWalkingCustomer } from '../controllers/userController.js';
+import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren, lookupUser, createWalkingCustomer, suggestUsers } from '../controllers/userController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -9,6 +9,7 @@ router.route('/')
   .post(protect, adminOnly, createStaff);
 
 router.get('/lookup', protect, adminOnly, lookupUser);
+router.get('/suggest', protect, adminOnly, suggestUsers);
 router.post('/walking', protect, adminOnly, createWalkingCustomer);
 
 router.route('/:id')

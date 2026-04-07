@@ -30,7 +30,7 @@ export const getClassById = asyncHandler(async (req, res) => {
 });
 
 export const createClass = asyncHandler(async (req, res) => {
-  const { title, description, ageGroup, duration, availableTrainers, price, capacity } = req.body;
+  const { title, description, ageGroup, duration, availableTrainers, price, capacity, imageUrl } = req.body;
   if (!title || price == null) {
     res.status(400);
     throw new Error('Title and price are required');
@@ -48,6 +48,7 @@ export const createClass = asyncHandler(async (req, res) => {
     availableTrainers,
     price,
     capacity,
+    imageUrl,
     locationId
   });
   res.status(201).json(created);

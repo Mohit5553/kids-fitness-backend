@@ -7,12 +7,12 @@ export const getPlans = asyncHandler(async (req, res) => {
   const locationId = queryLocationId || resolveReadLocationId(req);
   // Show plans for the specific location OR global plans (locationId: null)
   const filter = (locationId && locationId !== 'all') ? { $or: [{ locationId }, { locationId: null }] } : {};
-  const plans = await Plan.find(filter).populate('locationId', 'name').sort({ createdAt: -1 });
+  const plans = await Plan.find(filter).populate('locationId', 'name').populate('trainerId', 'name avatarUrl').sort({ createdAt: -1 });
   res.json(plans);
 });
 
 export const createPlan = asyncHandler(async (req, res) => {
-  const { name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured } = req.body;
+  const { name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, trainerAllocation, trainerId, extensionRules } = req.body;
   if (!name || price == null) {
     res.status(400);
     throw new Error('Name and price are required');
@@ -23,7 +23,11 @@ export const createPlan = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Location is required');
   }
-  const created = await Plan.create({ name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, locationId });
+
+  // Ensure empty string is null for trainerId to avoid BSON error
+  const finalTrainerId = (trainerAllocation === 'fixed' && trainerId) ? trainerId : null;
+
+  const created = await Plan.create({ name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId });
   res.status(201).json(created);
 });
 
@@ -42,6 +46,10 @@ export const updatePlan = asyncHandler(async (req, res) => {
   const updates = { ...req.body };
   // Handle 'all' as null for global plans from UI
   if (updates.locationId === 'all') updates.locationId = null;
+
+  // Ensure empty string is null for trainerId to avoid BSON error
+  if (updates.trainerId === '') updates.trainerId = null;
+  if (updates.trainerAllocation === 'random') updates.trainerId = null;
 
   Object.assign(plan, updates);
   const saved = await plan.save();

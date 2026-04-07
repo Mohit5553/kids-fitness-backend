@@ -37,7 +37,10 @@ export const protect = asyncHandler(async (req, res, next) => {
     if (req.user.role === 'superadmin') {
       req.user.permissions = ['*']; // Global access
     } else {
-      const roleDoc = await Role.findOne({ name: req.user.role, status: 'active' });
+      const roleDoc = await Role.findOne({ 
+        name: { $regex: new RegExp(`^${req.user.role}$`, 'i') }, 
+        status: 'active' 
+      });
       req.user.permissions = roleDoc ? roleDoc.permissions || [] : [];
     }
 

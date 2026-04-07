@@ -9,6 +9,11 @@ const membershipSchema = new mongoose.Schema(
     endDate: { type: Date },
     autoRenew: { type: Boolean, default: false },
     classesRemaining: { type: Number },
+    childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' },
+    preferredDays: [{ type: String }],
+    preferredSlots: [{ type: String }],
+    sessionsPerWeek: { type: Number, default: 3 },
+    generatedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }],
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     notes: { type: String },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }

@@ -154,16 +154,20 @@ export const getUserChildren = asyncHandler(async (req, res) => {
 });
 
 export const lookupUser = asyncHandler(async (req, res) => {
-  const { query } = req.query; // email or phone
+  const { query } = req.query; // email, phone, or name
   if (!query) {
     res.status(400);
     throw new Error('Search query is required');
   }
 
+  const regex = new RegExp(query.trim(), 'i');
   const user = await User.findOne({
+    role: { $in: ['parent', 'customer'] },
     $or: [
-      { email: new RegExp(`^${query}$`, 'i') },
-      { phone: query }
+      { email: new RegExp(`^${query.trim()}$`, 'i') },
+      { phone: query.trim() },
+      { phone: regex },
+      { name: regex }
     ]
   }).select('-password');
 
@@ -174,6 +178,7 @@ export const lookupUser = asyncHandler(async (req, res) => {
   const children = await Child.find({ parentId: user._id });
   res.json({ user, children });
 });
+
 
 export const createWalkingCustomer = asyncHandler(async (req, res) => {
   const { name, email, phone, children } = req.body;
@@ -244,3 +249,21 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
     children: allChildren
   });
 });
+
+export const suggestUsers = asyncHandler(async (req, res) => {
+  const { query } = req.query;
+  if (!query || query.trim().length < 2) {
+    return res.json([]);
+  }
+  const regex = new RegExp(query.trim(), 'i');
+  const users = await User.find({
+    role: { $in: ['parent', 'customer'] },
+    status: 'active',
+    $or: [{ name: regex }, { email: regex }, { phone: regex }]
+  })
+    .select('_id name email phone role')
+    .limit(8)
+    .lean();
+  res.json(users);
+});
+

@@ -58,3 +58,12 @@ export const deleteChild = asyncHandler(async (req, res) => {
   await child.deleteOne();
   res.json({ message: 'Child removed' });
 });
+
+export const getChildById = asyncHandler(async (req, res) => {
+  const child = await Child.findById(req.params.id).populate('parentId', 'name email phone');
+  if (!child) {
+    res.status(404);
+    throw new Error('Child not found');
+  }
+  res.json(child);
+});

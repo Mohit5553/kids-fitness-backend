@@ -6,16 +6,18 @@ import {
   updateSession,
   deleteSession,
   getSessionQr,
-  bulkCreateSessions
+  bulkCreateSessions,
+  updateTrainerStatus
 } from '../controllers/sessionController.js';
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-router.get('/', getSessions);
-router.get('/:id', getSessionById);
+router.get('/', optionalAuth, getSessions);
+router.get('/:id', optionalAuth, getSessionById);
 router.post('/', protect, adminOnly, createSession);
 router.put('/:id', protect, adminOnly, updateSession);
+router.put('/:id/trainer-status', protect, updateTrainerStatus);
 router.delete('/:id', protect, deleteSession);
 router.post('/bulk', protect, adminOnly, bulkCreateSessions);
 router.get('/:id/qr', protect, adminOnly, getSessionQr);
