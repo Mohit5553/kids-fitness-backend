@@ -88,6 +88,8 @@ export const adminOnly = (req, res, next) => {
   }
 };
 
+export const staffOnly = adminOnly; // Alias for promotion and other staff routes
+
 export const checkPermission = (permission) => (req, res, next) => {
   if (req.user && (req.user.permissions.includes('*') || req.user.permissions.includes(permission))) {
     next();

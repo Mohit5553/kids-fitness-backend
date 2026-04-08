@@ -163,6 +163,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .populate('classId', 'title capacity')
         .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
         .populate('locationId', 'name')
+        .populate('promotionId', 'name')
+        .populate('processedBy', 'name')
         .sort({ date: -1 })
         .lean();
       break;
@@ -178,6 +180,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       data = await Payment.find({ ...filter, ...dateFilter })
         .populate('userId', 'name email')
         .populate('locationId', 'name')
+        .populate('promotionId', 'name')
+        .populate('processedBy', 'name')
         .sort({ createdAt: -1 })
         .lean();
       break;
@@ -226,14 +230,6 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       }));
       break;
 
-    case 'attendance':
-      const attendanceDateFilter = {};
-      if (sDate && eDate) {
-        attendanceDateFilter.checkedInAt = {
-          $gte: sDate,
-          $lte: eDate
-        };
-      }
       data = await Attendance.find({ ...filter, ...attendanceDateFilter })
         .populate('bookingId', 'bookingNumber')
         .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
@@ -242,6 +238,29 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .populate('locationId', 'name')
         .sort({ checkedInAt: -1 })
         .lean();
+      break;
+
+    case 'promotions_usage':
+      // Aggregate usage per promotion
+      const paymentsWithPromos = await Payment.find({ ...filter, ...dateFilter, promotionId: { $exists: true } })
+        .populate('promotionId', 'name promoType')
+        .populate('userId', 'name')
+        .populate('locationId', 'name')
+        .populate('processedBy', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
+        
+      data = paymentsWithPromos.map(p => ({
+        ...p,
+        promoName: p.promotionId?.name || 'Unknown',
+        promoType: p.promotionId?.promoType || 'N/A',
+        customerName: p.userId?.name || 'Guest',
+        branchName: p.locationId?.name || 'N/A',
+        cashierName: p.processedBy?.name || 'System',
+        discount: p.discountAmount || 0,
+        finalAmount: p.amount,
+        date: p.createdAt
+      }));
       break;
 
     default:

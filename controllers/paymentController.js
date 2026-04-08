@@ -130,7 +130,7 @@ export const getAllPayments = asyncHandler(async (req, res) => {
 });
 
 export const createPayment = asyncHandler(async (req, res) => {
-  const { bookingId, planId, membershipId, amount, paymentMethod, reference, last4 } = req.body;
+  const { bookingId, planId, membershipId, amount, paymentMethod, reference, last4, promotionId, discountAmount, userId, processedBy } = req.body;
   if (!amount) {
     res.status(400);
     throw new Error('Amount is required');
@@ -160,7 +160,10 @@ export const createPayment = asyncHandler(async (req, res) => {
     status: 'paid',
     reference,
     last4,
-    locationId
+    locationId,
+    promotionId,
+    discountAmount,
+    processedBy: processedBy || req.user._id
   });
 
   // Notify User
@@ -173,7 +176,7 @@ export const createPayment = asyncHandler(async (req, res) => {
 });
 
 export const createBookingPayment = asyncHandler(async (req, res) => {
-  const { bookingId, paymentMethod, reference, last4 } = req.body;
+  const { bookingId, paymentMethod, reference, last4, promotionId, discountAmount } = req.body;
   if (!bookingId) {
     res.status(400);
     throw new Error('bookingId is required');
@@ -199,7 +202,9 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
     status: 'paid',
     reference,
     last4,
-    locationId: booking.locationId
+    locationId: booking.locationId,
+    promotionId,
+    discountAmount
   });
 
   booking.status = 'confirmed';

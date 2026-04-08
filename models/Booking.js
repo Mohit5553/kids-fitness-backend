@@ -46,7 +46,9 @@ const bookingSchema = new mongoose.Schema(
       attendedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       finalizedAt: Date,
       finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-    }
+    },
+    promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' },
+    discountAmount: { type: Number, default: 0 }
   },
   { timestamps: true }
 );

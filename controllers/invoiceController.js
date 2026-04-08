@@ -71,13 +71,13 @@ export const getInvoiceById = asyncHandler(async (req, res) => {
   // Check ownership
   const userRole = (req.user.role || '').toLowerCase();
   // Universal Staff Check: Anyone with permissions or not a basic parent/customer
-  const isStaff = (req.user.permissions && req.user.permissions.length > 0) || 
-                  !['parent', 'customer'].includes(userRole);
-  
+  const isStaff = (req.user.permissions && req.user.permissions.length > 0) ||
+    !['parent', 'customer'].includes(userRole);
+
   // Handle both raw ID and populated user object
   const invoiceUserId = invoice.userId?._id?.toString() || invoice.userId?.toString();
   const isOwner = invoiceUserId === req.user._id.toString();
-  
+
   // Double-Check: Match by email from the populated user object
   const isUserEmailMatch = req.user.email && invoice.userId?.email?.toLowerCase() === req.user.email.toLowerCase();
   const isGuestOwner = req.user.email && invoice.guestDetails?.email?.toLowerCase() === req.user.email.toLowerCase();
@@ -114,7 +114,7 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
       res.status(404);
       throw new Error('Booking not found');
     }
-    
+
     invoice = await generateInvoiceFromBooking(booking);
     // Re-populate to match expected format
     await invoice.populate([
@@ -127,13 +127,13 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
   // Check ownership
   const userRole = (req.user.role || '').toLowerCase();
   // Universal Staff Check: Anyone with permissions or not a basic parent/customer
-  const isStaff = (req.user.permissions && req.user.permissions.length > 0) || 
-                  !['parent', 'customer'].includes(userRole);
-  
+  const isStaff = (req.user.permissions && req.user.permissions.length > 0) ||
+    !['parent', 'customer'].includes(userRole);
+
   // Handle both raw ID and populated user object
   const invoiceUserId = invoice.userId?._id?.toString() || invoice.userId?.toString();
   const isOwner = invoiceUserId === req.user._id.toString();
-  
+
   // Double-Check: Match by email from the populated user object
   const isUserEmailMatch = req.user.email && invoice.userId?.email?.toLowerCase() === req.user.email.toLowerCase();
   const isGuestOwner = req.user.email && invoice.guestDetails?.email?.toLowerCase() === req.user.email.toLowerCase();

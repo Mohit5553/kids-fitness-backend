@@ -15,6 +15,7 @@ const membershipSchema = new mongoose.Schema(
     sessionsPerWeek: { type: Number, default: 3 },
     generatedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }],
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
+    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
     notes: { type: String },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
   },
