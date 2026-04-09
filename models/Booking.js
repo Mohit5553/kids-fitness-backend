@@ -18,7 +18,9 @@ const bookingSchema = new mongoose.Schema(
         childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' }
       }
     ],
-    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
+    bookingType: { type: String, enum: ['session', 'package'], default: 'session' },
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class' },
+    planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session' },
     date: { type: Date, required: true },
     totalAmount: { type: Number, required: true },
@@ -44,7 +46,9 @@ const bookingSchema = new mongoose.Schema(
       attendedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       finalizedAt: Date,
       finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-    }
+    },
+    promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' },
+    discountAmount: { type: Number, default: 0 }
   },
   { timestamps: true }
 );

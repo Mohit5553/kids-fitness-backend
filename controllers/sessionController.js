@@ -10,7 +10,7 @@ import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId }
 // @route   GET /api/sessions
 // @access  Private
 export const getSessions = asyncHandler(async (req, res) => {
-  const { start, end, classId, trainerId, locationId: queryLocationId, trainerName, trainerEmail, all } = req.query;
+  const { start, end, classId, trainerId, locationId: queryLocationId, trainerName, trainerEmail, all, includeMemberships } = req.query;
   const filter = {};
 
   if (!all) {
@@ -28,6 +28,14 @@ export const getSessions = asyncHandler(async (req, res) => {
     if (locationIds && locationIds.length > 0) {
       filter.locationId = { $in: locationIds };
     }
+  }
+
+  // Visibility Logic: Hide member-specific slots from public view/parents/admins on main schedule
+  // Only show them if includeMemberships=true is passed (used in admin management pages)
+  const isStaff = req.user && req.user.role !== 'parent';
+
+  if (!(includeMemberships === 'true' && isStaff)) {
+    filter.membershipId = null; 
   }
 
   if (start || end) {
@@ -65,21 +73,42 @@ export const getSessions = asyncHandler(async (req, res) => {
     .populate('classId', 'title ageGroup duration price minAge maxAge')
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
+    .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } })
     .sort({ startTime: 1 }); // Changed to sort by start time ascending for dashboard clarity
 
   // Add bookingsCount to each session
   const sessionsWithCounts = await Promise.all(
     sessions.map(async (session) => {
-      const bookingsCount = await Booking.countDocuments({
+      // If the session is directly linked to a membership, it counts as 1 registration
+      let totalBookings = await Booking.countDocuments({
         sessionId: session._id,
         status: { $ne: 'cancelled' }
       });
-      return {
-        ...session.toObject(),
-        bookingsCount
-      };
+
+      if (session.membershipId) {
+          totalBookings += 1;
+      }
+
+      const sessionObj = session.toObject();
+      sessionObj.bookedParticipants = totalBookings;
+
+      // Robust fallback: if trainer is TBA but session is from a membership with a fixed trainer
+      if (!sessionObj.trainerId && session.membershipId) {
+          const Membership = mongoose.model('Membership');
+          const Plan = mongoose.model('Plan');
+          const m = await Membership.findById(session.membershipId);
+          if (m) {
+              const p = await Plan.findById(m.planId).populate('trainerId', 'name');
+              if (p && p.trainerId && p.trainerAllocation === 'fixed') {
+                  sessionObj.trainerId = p.trainerId;
+                  sessionObj.trainerStatus = 'accepted';
+              }
+          }
+      }
+
+      return sessionObj;
     })
-  );
+);
 
   res.json(sessionsWithCounts);
 });
@@ -93,12 +122,22 @@ export const getSessionById = asyncHandler(async (req, res) => {
   const session = await Session.findOne(filter)
     .populate('classId', 'title ageGroup duration price minAge maxAge')
     .populate('trainerId', 'name')
-    .populate('locationId', 'name');
+    .populate('locationId', 'name')
+    .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } });
     
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
   }
+
+  // Consistent Visibility Logic
+  const isStaff = req.user && req.user.role !== 'parent';
+
+  if (session.membershipId && !isStaff) {
+    res.status(403);
+    throw new Error('Not authorized to view this private session');
+  }
+
   res.json(session);
 });
 
@@ -210,6 +249,11 @@ export const updateSession = asyncHandler(async (req, res) => {
     await checkTrainerConflict(res, updateData.trainerId || session.trainerId, start, end, session._id);
   }
 
+  // If trainer was updated, reset trainerStatus to pending
+  if (updateData.trainerId && updateData.trainerId !== session.trainerId?.toString()) {
+    session.trainerStatus = 'pending';
+  }
+
   Object.assign(session, updateData);
   const saved = await session.save();
 
@@ -298,6 +342,44 @@ export const getSessionQr = asyncHandler(async (req, res) => {
   }
   const token = signQrToken({ sessionId: session._id, locationId: session.locationId });
   res.json({ token });
+});
+
+// @desc    Update trainer acceptance status
+// @route   PUT /api/sessions/:id/trainer-status
+// @access  Private
+export const updateTrainerStatus = asyncHandler(async (req, res) => {
+  const { trainerStatus } = req.body;
+  if (!['pending', 'accepted', 'rejected'].includes(trainerStatus)) {
+    res.status(400);
+    throw new Error('Invalid trainer status');
+  }
+
+  const session = await Session.findById(req.params.id);
+  if (!session) {
+    res.status(404);
+    throw new Error('Session not found');
+  }
+
+  // Permission Check: Admin or the Trainer assigned to the session
+  const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+  let isAssignedTrainer = false;
+
+  const TrainerModel = mongoose.model('Trainer');
+  const trainer = await TrainerModel.findOne({ userId: req.user._id });
+  
+  if (trainer && session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
+    isAssignedTrainer = true;
+  }
+
+  if (!isAdmin && !isAssignedTrainer) {
+    res.status(403);
+    throw new Error('Not authorized to update trainer status for this session');
+  }
+
+  session.trainerStatus = trainerStatus;
+  const saved = await session.save();
+
+  res.json(saved);
 });
 
 // @desc    Bulk create sessions

@@ -12,6 +12,7 @@ const classSchema = new mongoose.Schema(
     availableTrainers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' }],
     price: { type: Number, required: true },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    imageUrl: { type: String },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }
   },
   { timestamps: true }

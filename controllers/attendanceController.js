@@ -79,6 +79,12 @@ export const checkIn = asyncHandler(async (req, res) => {
     existing.method = method || existing.method;
     existing.checkedInAt = new Date();
     const saved = await existing.save();
+
+    // Sync session status
+    if (status) {
+      await Session.findByIdAndUpdate(resolvedSessionId, { attendanceStatus: status });
+    }
+    
     return res.json(saved);
   }
 
@@ -92,6 +98,12 @@ export const checkIn = asyncHandler(async (req, res) => {
     method,
     locationId: resolvedLocationId
   });
+
+  // Sync session status
+  if (status) {
+    await Session.findByIdAndUpdate(resolvedSessionId, { attendanceStatus: status });
+  }
+
   res.status(201).json(created);
 });
 
@@ -114,6 +126,12 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
     existing.method = 'qr';
     existing.checkedInAt = new Date();
     const saved = await existing.save();
+
+    // Sync session status
+    if (status) {
+       await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status });
+    }
+
     return res.json(saved);
   }
 
@@ -127,6 +145,11 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
     method: 'qr',
     locationId: session?.locationId
   });
+
+  // Sync session status
+  if (status || true) {
+     await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status || 'present' });
+  }
 
   res.status(201).json(created);
 });

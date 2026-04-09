@@ -1,14 +1,13 @@
 import asyncHandler from 'express-async-handler';
 import Invoice from '../models/Invoice.js';
 import Booking from '../models/Booking.js';
+import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
 
 /**
  * Helper to generate a missing invoice for a booking
  */
 const generateInvoiceFromBooking = async (booking) => {
-  const invYear = new Date().getFullYear();
-  const invRandom = Math.floor(1000 + Math.random() * 9000);
-  const invoiceNumber = `INV-${invYear}-${invRandom}`;
+  const invoiceNumber = await getNextInvoiceNumber();
 
   await booking.populate('classId', 'title price');
 
@@ -72,13 +71,13 @@ export const getInvoiceById = asyncHandler(async (req, res) => {
   // Check ownership
   const userRole = (req.user.role || '').toLowerCase();
   // Universal Staff Check: Anyone with permissions or not a basic parent/customer
-  const isStaff = (req.user.permissions && req.user.permissions.length > 0) || 
-                  !['parent', 'customer'].includes(userRole);
-  
+  const isStaff = (req.user.permissions && req.user.permissions.length > 0) ||
+    !['parent', 'customer'].includes(userRole);
+
   // Handle both raw ID and populated user object
   const invoiceUserId = invoice.userId?._id?.toString() || invoice.userId?.toString();
   const isOwner = invoiceUserId === req.user._id.toString();
-  
+
   // Double-Check: Match by email from the populated user object
   const isUserEmailMatch = req.user.email && invoice.userId?.email?.toLowerCase() === req.user.email.toLowerCase();
   const isGuestOwner = req.user.email && invoice.guestDetails?.email?.toLowerCase() === req.user.email.toLowerCase();
@@ -88,6 +87,12 @@ export const getInvoiceById = asyncHandler(async (req, res) => {
     console.log(`[DEBUG] isStaff: ${isStaff}, isOwner: ${isOwner}, isUserEmailMatch: ${isUserEmailMatch}, isGuestOwner: ${isGuestOwner}`);
     res.status(403);
     throw new Error('Not authorized');
+  }
+
+  // HEALING LOGIC: Sync invoice status with booking status (handles historical mismatches)
+  if (invoice.bookingId && ['cancelled', 'refunded'].includes(invoice.bookingId.status) && invoice.status === 'paid') {
+    invoice.status = 'cancelled';
+    await invoice.save();
   }
 
   res.json(invoice);
@@ -109,7 +114,7 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
       res.status(404);
       throw new Error('Booking not found');
     }
-    
+
     invoice = await generateInvoiceFromBooking(booking);
     // Re-populate to match expected format
     await invoice.populate([
@@ -122,13 +127,13 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
   // Check ownership
   const userRole = (req.user.role || '').toLowerCase();
   // Universal Staff Check: Anyone with permissions or not a basic parent/customer
-  const isStaff = (req.user.permissions && req.user.permissions.length > 0) || 
-                  !['parent', 'customer'].includes(userRole);
-  
+  const isStaff = (req.user.permissions && req.user.permissions.length > 0) ||
+    !['parent', 'customer'].includes(userRole);
+
   // Handle both raw ID and populated user object
   const invoiceUserId = invoice.userId?._id?.toString() || invoice.userId?.toString();
   const isOwner = invoiceUserId === req.user._id.toString();
-  
+
   // Double-Check: Match by email from the populated user object
   const isUserEmailMatch = req.user.email && invoice.userId?.email?.toLowerCase() === req.user.email.toLowerCase();
   const isGuestOwner = req.user.email && invoice.guestDetails?.email?.toLowerCase() === req.user.email.toLowerCase();
@@ -138,6 +143,12 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
     console.log(`[DEBUG] isStaff: ${isStaff}, isOwner: ${isOwner}, isUserEmailMatch: ${isUserEmailMatch}, isGuestOwner: ${isGuestOwner}`);
     res.status(403);
     throw new Error('Not authorized');
+  }
+
+  // HEALING LOGIC: Sync invoice status with booking status (handles historical mismatches)
+  if (invoice.bookingId && ['cancelled', 'refunded'].includes(invoice.bookingId.status) && invoice.status === 'paid') {
+    invoice.status = 'cancelled';
+    await invoice.save();
   }
 
   res.json(invoice);

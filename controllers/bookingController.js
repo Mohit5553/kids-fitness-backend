@@ -10,6 +10,9 @@ import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import Invoice from '../models/Invoice.js';
 import Attendance from '../models/Attendance.js';
+import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
+import Membership from '../models/Membership.js';
+import Child from '../models/Child.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -25,16 +28,21 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
-  const { sessionId, trainerId } = req.query;
+  const { sessionId, trainerId, userId, childId } = req.query;
   
   // Visibility Logic: If we're searching for a specific session or trainer, we skip the location filter 
   // so admins and trainers can see their work across all branches.
-  const isDirectLookup = sessionId || trainerId;
+  const isDirectLookup = sessionId || trainerId || userId || childId;
   const filter = {};
+  
+  if (userId) filter.userId = userId;
+  if (childId) filter['participants.childId'] = childId;
 
   if (!isDirectLookup) {
     const locationId = resolveReadLocationId(req);
-    if (locationId) filter.locationId = locationId;
+    if (locationId && locationId !== 'all') {
+      filter.$or = [{ locationId }, { locationId: null }];
+    }
   }
 
   if (sessionId) {
@@ -48,6 +56,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     .populate('userId', 'name email')
     .populate('processedBy', 'name email')
     .populate('classId', 'title price')
+    .populate('planId', 'name price validity')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .populate('participants.childId', 'name age gender')
     .sort({ createdAt: -1 });
@@ -62,11 +71,39 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     filtered = filtered.filter(b => b.groupId === groupId);
   }
 
+  // If sessionId is provided AND it belongs to a membership, we add that member to the participant list
+  if (sessionId) {
+      const targetSession = await Session.findById(sessionId);
+      if (targetSession && targetSession.membershipId) {
+          const membership = await Membership.findById(targetSession.membershipId).populate('userId', 'name email').populate('childId');
+          if (membership) {
+              const virtualBooking = {
+                  _id: `MR-${membership._id}`,
+                  bookingNumber: `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
+                  bookingType: 'package',
+                  userId: membership.userId,
+                  participants: membership.childId ? [{
+                      name: membership.childId.name,
+                      age: membership.childId.age,
+                      gender: membership.childId.gender,
+                      relation: 'Child',
+                      childId: membership.childId._id
+                  }] : [],
+                  status: 'confirmed',
+                  paymentStatus: 'completed',
+                  createdAt: membership.createdAt,
+                  isVirtualMembership: true
+              };
+              filtered.unshift(virtualBooking);
+          }
+      }
+  }
+
   res.json(filtered);
 });
 
 export const createBooking = asyncHandler(async (req, res) => {
-  const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails, userId } = req.body;
+  const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails, userId, promotionId, discountAmount } = req.body;
 
   if (!req.user && (!guestDetails || !guestDetails.name || !guestDetails.email)) {
     res.status(400);
@@ -165,7 +202,9 @@ export const createBooking = asyncHandler(async (req, res) => {
     paymentMethod,
     paymentStatus,
     paymentDate: paymentStatus === 'completed' ? new Date() : undefined,
-    status: paymentStatus === 'completed' ? 'confirmed' : 'pending'
+    status: paymentStatus === 'completed' ? 'confirmed' : 'pending',
+    promotionId,
+    discountAmount: discountAmount || 0
   };
 
   if (req.user) {
@@ -189,16 +228,14 @@ export const createBooking = asyncHandler(async (req, res) => {
   const created = await Booking.create(bookingData);
 
   // OFFICIAL INVOICE GENERATION
-  const invYear = new Date().getFullYear();
-  const invRandom = Math.floor(1000 + Math.random() * 9000);
-  const invoiceNumber = `INV-${invYear}-${invRandom}`;
+  const invoiceNumber = await getNextInvoiceNumber();
 
   const invoiceData = {
     invoiceNumber,
     bookingId: created._id,
     userId: created.userId,
     guestDetails: created.guestDetails,
-    amount: totalAmount,
+    amount: (totalAmount - (discountAmount || 0)),
     status: created.status === 'confirmed' ? 'paid' : 'unpaid',
     locationId: resolvedLocationId,
     items: [
@@ -210,13 +247,23 @@ export const createBooking = asyncHandler(async (req, res) => {
       }
     ]
   };
+
+  if (discountAmount > 0) {
+    invoiceData.items.push({
+      description: 'Promotion Discount',
+      quantity: 1,
+      unitPrice: -discountAmount,
+      total: -discountAmount
+    });
+  }
+
   await Invoice.create(invoiceData);
 
   // If paying at center, generate a SalesOrder
   if (paymentMethod === 'center') {
     const orderData = {
       bookingId: created._id,
-      amount: totalAmount,
+      amount: (totalAmount - (discountAmount || 0)),
       status: 'pending',
       locationId: resolvedLocationId
     };
@@ -232,10 +279,13 @@ export const createBooking = asyncHandler(async (req, res) => {
   await Payment.create({
     userId: created.userId,
     bookingId: created._id,
-    amount: totalAmount,
+    amount: (totalAmount - (discountAmount || 0)),
+    discountAmount: discountAmount || 0,
+    promotionId: promotionId,
     paymentMethod: paymentMethod || 'center',
     status: paymentMethod === 'online' ? 'paid' : 'pending',
-    locationId: resolvedLocationId
+    locationId: resolvedLocationId,
+    processedBy: req.user?._id
   });
 
   // Update session occupancy if applicable
@@ -323,7 +373,14 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     };
 
     // Sync status and transaction specifics back to Payment record
-    const payRec = await Payment.findOne({ bookingId: booking._id });
+    // Try to find payment by bookingId or groupId
+    const payRec = await Payment.findOne({ 
+      $or: [
+        { bookingId: booking._id },
+        { groupId: booking.groupId }
+      ].filter(cond => cond.groupId !== undefined || cond.bookingId !== undefined)
+    });
+    
     if (payRec) {
       payRec.status = 'paid';
       const finalMethod = paymentMethod ? `center_${paymentMethod}` : 'center';
@@ -334,6 +391,22 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
       // Also update booking's specific payment details
       booking.paymentMethod = finalMethod;
       booking.paymentReference = reference;
+    }
+
+    // Sync Invoice Status: Ensure official invoice is marked as paid
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'paid';
+      await invoiceRec.save();
+    }
+  }
+
+  if (status === 'cancelled') {
+    // Sync Invoice Status: Ensure official invoice is marked as cancelled
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'cancelled';
+      await invoiceRec.save();
     }
   }
 
@@ -451,6 +524,13 @@ export const resolveRefundRequest = asyncHandler(async (req, res) => {
   if (status === 'refunded') {
     booking.refundStatus = 'refunded';
     booking.status = 'cancelled';
+
+    // Sync Invoice Status: Mark invoice as cancelled upon refund
+    const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
+    if (invoiceRec) {
+      invoiceRec.status = 'cancelled';
+      await invoiceRec.save();
+    }
   } else if (status === 'declined') {
     if (!reason) {
       res.status(400);
@@ -598,7 +678,7 @@ export const linkUserBookings = async (user) => {
  * Consolidated into a single SalesOrder and Payment.
  */
 export const createGroupBooking = asyncHandler(async (req, res) => {
-  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName: providedCorporateName, paymentMethod } = req.body;
+  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName: providedCorporateName, paymentMethod, promotionId, discountAmount } = req.body;
 
   const resolvedSessionIds = sessionIds || sessions;
 
@@ -679,7 +759,9 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
         paymentMethod: paymentMethod || 'center',
         groupId: groupBookingId,
         isCorporate: isCorporateAdmin || isCorporateClient,
-        corporateName
+        corporateName,
+        promotionId,
+        discountAmount: (discountAmount || 0) / (resolvedSessionIds.length * participants.length) // Distributed discount
       });
       bookings.push(b);
       totalAmount += classItem.price;
@@ -689,11 +771,9 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
       await session.save();
 
       // INVOICE GENERATION for each booking in the group
-      const invYear = new Date().getFullYear();
-      const invRandom = Math.floor(1000 + Math.random() * 9000);
-      const invoiceNumber = `INV-${invYear}-${invRandom}`;
+      const invoiceNumber = await getNextInvoiceNumber();
 
-      await Invoice.create({
+      const invoiceData = {
         invoiceNumber,
         bookingId: b._id,
         userId: req.user._id,
@@ -708,7 +788,20 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
             total: classItem.price
           }
         ]
-      });
+      };
+
+      if (discountAmount) {
+         const distDisc = (discountAmount || 0) / (resolvedSessionIds.length * participants.length);
+         invoiceData.amount -= distDisc;
+         invoiceData.items.push({
+            description: 'Promotion Discount (Prop-rata)',
+            quantity: 1,
+            unitPrice: -distDisc,
+            total: -distDisc
+         });
+      }
+
+      await Invoice.create(invoiceData);
     }
   }
 
@@ -717,21 +810,27 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     userId: req.user._id,
     bookings: bookings.map(b => b._id),
     totalAmount,
+    totalAmount: (totalAmount - (discountAmount || 0)),
     status: paymentMethod === 'online' ? 'completed' : 'pending',
     paymentMethod: paymentMethod || 'center',
     groupId: groupBookingId,
-    corporateName
+    corporateName,
+    promotionId,
+    discountAmount: discountAmount || 0
   });
 
   // 5. Create Consolidated Payment
   await Payment.create({
     userId: req.user._id,
     orderId: salesOrder._id,
-    amount: totalAmount,
+    amount: (totalAmount - (discountAmount || 0)),
+    discountAmount: discountAmount || 0,
+    promotionId,
     paymentMethod: paymentMethod || 'center',
     status: paymentMethod === 'online' ? 'paid' : 'pending',
     locationId,
-    groupId: groupBookingId
+    groupId: groupBookingId,
+    processedBy: req.user?._id
   });
 
   res.status(201).json({
