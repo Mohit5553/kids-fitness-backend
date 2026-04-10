@@ -47,6 +47,7 @@ const bookingSchema = new mongoose.Schema(
       finalizedAt: Date,
       finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
     },
+    reminderSent: { type: Boolean, default: false },
     promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' },
     discountAmount: { type: Number, default: 0 }
   },

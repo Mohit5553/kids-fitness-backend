@@ -1,6 +1,7 @@
 import asyncHandler from 'express-async-handler';
 import ClassModel from '../models/Class.js';
 import Plan from '../models/Plan.js';
+import Promotion from '../models/Promotion.js';
 import mongoose from 'mongoose';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
@@ -12,10 +13,43 @@ export const getClasses = asyncHandler(async (req, res) => {
   if (all !== 'true') {
     filter.status = 'active';
   }
+
+  // Fetch classes
   const classes = await ClassModel.find(filter)
     .populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery')
     .sort({ createdAt: -1 });
-  res.json(classes);
+
+  // Fetch active promotions
+  const now = new Date();
+  const activePromos = await Promotion.find({
+    isActive: true,
+    startDate: { $lte: now },
+    endDate: { $gte: now }
+  }).lean();
+
+  // Attach promotions to each class
+  const classesWithPromos = classes.map(c => {
+    const classObj = c.toObject();
+    classObj.activePromotions = activePromos.filter(p => {
+      // Global promotion for this location?
+      if (p.applicableLocations && p.applicableLocations.length > 0) {
+        if (!p.applicableLocations.some(locId => locId.toString() === classObj.locationId?.toString())) {
+            return false;
+        }
+      }
+
+      // Specific class promotion?
+      const hasItemConstraint = (p.applicableClasses && p.applicableClasses.length > 0) || 
+                               (p.applicablePlans && p.applicablePlans.length > 0);
+      
+      if (!hasItemConstraint) return true; // It's a general location/global promo
+
+      return p.applicableClasses?.some(id => id.toString() === classObj._id.toString());
+    });
+    return classObj;
+  });
+
+  res.json(classesWithPromos);
 });
 
 export const getClassById = asyncHandler(async (req, res) => {

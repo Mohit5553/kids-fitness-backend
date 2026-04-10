@@ -74,7 +74,7 @@ export const getSessions = asyncHandler(async (req, res) => {
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
     .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } })
-    .sort({ startTime: 1 }); // Changed to sort by start time ascending for dashboard clarity
+    .sort({ startTime: 1 }); // Sort by soonest first to ensure tomorrow/today appear at the top
 
   // Add bookingsCount to each session
   const sessionsWithCounts = await Promise.all(

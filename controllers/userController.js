@@ -267,3 +267,26 @@ export const suggestUsers = asyncHandler(async (req, res) => {
   res.json(users);
 });
 
+
+export const adminUpdatePassword = asyncHandler(async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 6) {
+    res.status(400);
+    throw new Error('Password must be at least 6 characters long');
+  }
+
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    res.status(404);
+    throw new Error('User not found');
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  user.password = await bcrypt.hash(password, salt);
+  await user.save();
+
+  // Notify User of security change
+  sendAccountUpdateEmail(user, 'password').catch(err => console.error('Security update email failed:', err.message));
+
+  res.json({ message: 'Password updated successfully' });
+});

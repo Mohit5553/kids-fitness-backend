@@ -389,3 +389,45 @@ export async function sendPasswordResetEmail(user, resetUrl) {
     html
   });
 }
+
+export async function sendSessionReminderEmail(booking, classData, sessionData, userData) {
+  const isGuest = !booking.userId;
+  const name = isGuest ? booking.guestDetails.name : (userData.firstName || userData.name);
+  const email = isGuest ? booking.guestDetails.email : userData.email;
+
+  const html = `
+    <div style="${baseStyles}">
+      <div style="${headerStyles}">
+        <h1 style="margin:0; font-size: 24px;">Upcoming Session Reminder</h1>
+      </div>
+      <div style="${contentStyles}">
+        <p>Hi <strong>${name}</strong>,</p>
+        <p>This is a friendly reminder from <strong>Kids Fitness</strong> about your upcoming session!</p>
+        
+        <div style="background-color: #f8fbff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #29AAE2;">
+          <p style="margin: 0 0 10px 0;"><strong>Class:</strong> ${classData.title}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Date:</strong> ${new Date(sessionData.startTime).toLocaleDateString()}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Time:</strong> ${new Date(sessionData.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+          <p style="margin: 0;"><strong>Studio/Location:</strong> ${sessionData.location || 'Main Studio'}</p>
+        </div>
+
+        <p>We're looking forward to seeing you! Please try to arrive at least 10 minutes before the class starts.</p>
+        
+        <div style="text-align: center;">
+          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">View All Bookings</a>
+        </div>
+        
+        <p>If you have any questions or need to reschedule, please contact us.</p>
+      </div>
+      <div style="${footerStyles}">
+        &copy; ${new Date().getFullYear()} Kids Fitness. All rights reserved.
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    to: email,
+    subject: `Reminder: Your session for ${classData.title} is coming up!`,
+    html
+  });
+}

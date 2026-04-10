@@ -39,6 +39,7 @@ import invoiceRoutes from './routes/invoiceRoutes.js';
 import settingRoutes from './routes/settingRoutes.js';
 import extensionRoutes from './routes/extensionRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
+import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -115,6 +116,7 @@ connectDB()
   .then(() => {
     httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
+      initCronJobs();
     });
   })
   .catch((err) => {
