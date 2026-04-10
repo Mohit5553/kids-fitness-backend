@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import Membership from '../models/Membership.js';
 import Plan from '../models/Plan.js';
 import User from '../models/User.js';
@@ -7,7 +8,10 @@ import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendMembershipUpdateEmail } from '../utils/mailer.js';
 import Booking from '../models/Booking.js';
 import Child from '../models/Child.js';
+import Promotion from '../models/Promotion.js';
+import Invoice from '../models/Invoice.js';
 import Payment from '../models/Payment.js';
+import { getNextInvoiceNumber, getNextBookingNumber } from '../utils/sequenceGenerator.js';
 
 const addWeeks = (date, weeks) => new Date(date.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
 const addMonths = (date, months) => {
@@ -22,68 +26,172 @@ const addYears = (date, years) => {
 };
 
 export const getMyMemberships = asyncHandler(async (req, res) => {
-  const memberships = await Membership.find({ userId: req.user._id })
-    .populate('userId', 'name email firstName lastName')
-    .populate('planId')
-    .populate('childId')
-    .populate({
-      path: 'bookingId',
-      select: 'participants bookingNumber'
-    })
-    .populate({
-      path: 'generatedSessions',
-      populate: { path: 'trainerId', select: 'name' }
-    })
-    .sort({ createdAt: -1 });
-
-  const isMohit = req.user.name?.toLowerCase().includes('mohit');
-
-  for (let m of memberships) {
-    let saved = false;
-
-    // 1. Generate missing booking numbers for linked bookings that don't have one
-    if (m.bookingId && !m.bookingId.bookingNumber) {
-      const b = await Booking.findById(m.bookingId._id);
-      if (b && !b.bookingNumber) {
-          b.bookingNumber = `BK-${b._id.toString().slice(-4).toUpperCase()}`;
-          await b.save();
-          saved = true;
-      }
-    }
-
-    // 2. Specialized fix for Mohit and Hardik
-    if (isMohit && !m.childId && (m.planId?.name?.includes('Starter') || m.planId?.name?.includes('25'))) {
-       const hardik = await Child.findOne({ name: /Hardik/i });
-       if (hardik) {
-           m.childId = hardik._id;
-           saved = true;
-       }
-    }
-
-    // 3. Self-healing: broaden matching for old records missing bookingId
-    if (!m.bookingId) {
-      const matchingBooking = await Booking.findOne({
-        userId: m.userId,
-        createdAt: {
-          $gte: new Date(m.createdAt.getTime() - 3600000), // Within 1 hour
-          $lte: new Date(m.createdAt.getTime() + 3600000)
-        }
-      }).sort({ createdAt: -1 });
-
-      if (matchingBooking) {
-        m.bookingId = matchingBooking._id;
-        if (!matchingBooking.bookingNumber) {
-            matchingBooking.bookingNumber = `BK-${matchingBooking._id.toString().slice(-4).toUpperCase()}`;
-            await matchingBooking.save();
-        }
-        saved = true;
-      }
-    }
-
-    if (saved) await m.save();
+  if (!req.user?._id) {
+    return res.status(401).json({ message: 'User not authenticated' });
   }
 
-  res.json(memberships);
+  try {
+    const memberships = await Membership.find({ userId: req.user._id })
+      .populate('userId', 'name email firstName lastName')
+      .populate('planId')
+      .populate('childId')
+      .populate({
+        path: 'bookingId',
+        select: 'participants bookingNumber'
+      })
+      .populate({
+        path: 'generatedSessions',
+        populate: { path: 'trainerId', select: 'name' }
+      })
+      .sort({ createdAt: -1 });
+
+    const isMohit = req.user.name?.toLowerCase().includes('mohit');
+
+    for (let m of memberships) {
+      try {
+        let saved = false;
+
+        // 1. Generate missing booking numbers for linked bookings that don't have one
+        if (m.bookingId && m.bookingId._id && !m.bookingId.bookingNumber) {
+          const b = await Booking.findById(m.bookingId._id);
+          if (b && !b.bookingNumber) {
+              b.bookingNumber = `BK-${b._id.toString().slice(-4).toUpperCase()}`;
+              await b.save();
+              saved = true;
+          }
+        }
+
+        // 2. Specialized fix for Mohit and Hardik
+        if (isMohit && !m.childId && (m.planId?.name?.includes('Starter') || m.planId?.name?.includes('25'))) {
+           const hardik = await Child.findOne({ name: /Hardik/i });
+           if (hardik) {
+               m.childId = hardik._id;
+               saved = true;
+           }
+        }
+
+        // 3. Self-healing: broaden matching for old records missing bookingId
+        if (!m.bookingId && m.createdAt instanceof Date && !isNaN(m.createdAt)) {
+          let matchingBooking = null;
+
+          if (m.paymentId) {
+            matchingBooking = await Booking.findOne({ paymentId: m.paymentId?._id || m.paymentId });
+          }
+
+          if (!matchingBooking) {
+            matchingBooking = await Booking.findOne({
+              userId: m.userId?._id || m.userId,
+              planId: m.planId?._id || m.planId,
+              'participants.childId': m.childId?._id || m.childId,
+              createdAt: {
+                $gte: new Date(m.createdAt.getTime() - 43200000), // Within 12 hours
+                $lte: new Date(m.createdAt.getTime() + 43200000)
+              }
+            }).sort({ createdAt: -1 });
+          }
+
+          if (matchingBooking) {
+            m.bookingId = matchingBooking._id;
+            saved = true;
+            console.log(`[Self-healing] Linked membership ${m._id} to existing booking ${matchingBooking.bookingNumber}`);
+          } else {
+             // DEEP HEALING: If no booking exists AT ALL in the DB, re-create it now
+             try {
+                const plan = await Plan.findById(m.planId);
+                if (plan) {
+                    const bookingNumber = await getNextBookingNumber();
+                    
+                    const heelChild = m.childId ? await Child.findById(m.childId) : null;
+                    const heelPay = m.paymentId ? await Payment.findById(m.paymentId) : null;
+
+                    const heelBookingData = {
+                        userId: m.userId,
+                        bookingNumber,
+                        bookingType: 'package',
+                        planId: plan._id,
+                        date: m.startDate || m.createdAt,
+                        totalAmount: heelPay ? heelPay.amount : plan.price,
+                        status: 'confirmed',
+                        paymentStatus: 'completed',
+                        paymentMethod: heelPay ? heelPay.paymentMethod : 'center',
+                        paymentId: m.paymentId,
+                        locationId: plan.locationId,
+                        participants: heelChild ? [{
+                            name: heelChild.name,
+                            age: heelChild.age,
+                            gender: heelChild.gender,
+                            relation: 'Child',
+                            childId: heelChild._id
+                         }] : [{
+                            name: req.user.name || 'Account Holder',
+                            age: 18,
+                            relation: 'Self'
+                         }]
+                    };
+
+                    const healedBooking = await Booking.create(heelBookingData);
+                    m.bookingId = healedBooking._id;
+                    saved = true;
+                    console.log(`[Deep Healing] Re-created missing booking ${bookingNumber} for membership ${m._id}`);
+                }
+             } catch (healErr) {
+                console.error(`[Deep Healing Fail] for membership ${m._id}:`, healErr.message);
+             }
+          }
+        }
+
+        // 4. Invoice Healer: Restore missing invoices for existing bookings
+        if (m.bookingId) {
+            const invoiceExists = await Invoice.findOne({ bookingId: m.bookingId?._id || m.bookingId });
+            if (!invoiceExists) {
+                try {
+                    console.log(`[Invoice Healer] Restoring missing invoice for booking: ${m.bookingId}`);
+                    const booking = await Booking.findById(m.bookingId);
+                    const plan = await Plan.findById(m.planId);
+                    if (booking && plan) {
+                        const newInvoiceNumber = await getNextInvoiceNumber();
+                        await Invoice.create({
+                            invoiceNumber: newInvoiceNumber,
+                            bookingId: booking._id,
+                            userId: m.userId?._id || m.userId,
+                            amount: booking.totalAmount || plan.price,
+                            status: 'paid',
+                            locationId: m.locationId,
+                            items: [{
+                                description: `${plan.name} - Package (Restored)`,
+                                quantity: 1,
+                                unitPrice: plan.price,
+                                total: plan.price
+                            }]
+                        });
+                    }
+                } catch (healErr) {
+                    console.error('[Invoice Healer] Failed to restore invoice:', healErr.message);
+                }
+            }
+        }
+
+        if (saved) await m.save();
+      } catch (innerError) {
+        console.error(`[getMyMemberships] Error healing membership ${m._id}:`, innerError.message);
+        // Continue to next membership even if one fails to heal
+      }
+    }
+    
+    // 5. FINAL POPULATION: Ensure healed records have full objects before sending to frontend
+    const healedMemberships = await Membership.find({ _id: { $in: memberships.map(m => m._id) } })
+        .populate('userId', 'name email firstName lastName')
+        .populate('planId')
+        .populate('childId')
+        .populate({ path: 'bookingId', select: 'participants bookingNumber' })
+        .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } })
+        .sort({ createdAt: -1 });
+
+    res.json(healedMemberships);
+  } catch (error) {
+    console.error('[getMyMemberships] Fatal error:', error.message);
+    res.status(500).json({ message: 'Error retrieving memberships', error: error.message });
+  }
 });
 
 export const getAllMemberships = asyncHandler(async (req, res) => {
@@ -97,7 +205,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
 });
 
 export const createMembership = asyncHandler(async (req, res) => {
-  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek } = req.body;
+  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId } = req.body;
   if (!planId) {
     res.status(400);
     throw new Error('planId is required');
@@ -124,93 +232,197 @@ export const createMembership = asyncHandler(async (req, res) => {
     endDate = addWeeks(startDate, plan.durationWeeks);
   }
 
-  const classesRemaining = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined);
+  let classesRemaining = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined);
+  let finalEndDate = endDate;
+  let isConsolidatedBogo = false;
+
+  // CONSOLIDATED BOGO PRE-CHECK (Same Child)
+  if (paymentId && claimBogo && (String(bogoChildId) === String(childId) || (!bogoChildId && !childId))) {
+    if (classesRemaining) classesRemaining *= 2;
+    if (plan.durationWeeks) {
+      finalEndDate = addWeeks(finalEndDate, plan.durationWeeks);
+    } else if (plan.billingCycle === 'weekly') {
+      finalEndDate = addWeeks(finalEndDate, 1);
+    } else if (plan.billingCycle === 'monthly') {
+      finalEndDate = addMonths(finalEndDate, 1);
+    } else if (plan.billingCycle === 'yearly') {
+      finalEndDate = addYears(finalEndDate, 1);
+    }
+    isConsolidatedBogo = true;
+  }
 
   const isStaff = req.user && !['parent', 'customer'].includes((req.user.role || '').toLowerCase());
   const targetUserId = (isStaff && req.body.userId) ? req.body.userId : req.user._id;
 
-  const created = await Membership.create({
-    userId: targetUserId,
-    planId,
-    startDate,
-    endDate,
-    autoRenew: Boolean(autoRenew),
-    classesRemaining,
-    childId,
-    preferredDays,
-    preferredSlots,
-    sessionsPerWeek,
-    paymentId,
-    locationId: plan.locationId
-  });
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  // Auto-generate sessions
-  if (preferredDays && preferredSlots && preferredDays.length > 0) {
-    const sessionIds = await generateMembershipSessions(created, plan);
-    created.generatedSessions = sessionIds;
-    await created.save();
-  }
-
-  // CREATE UNIFIED BOOKING RECORD FOR THIS PACKAGE
   try {
-    const child = await Child.findById(childId);
-    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-    const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const bookingNumber = `BK-PKG-${dateStr}-${randomStr}`;
+    const [primaryMembership] = await Membership.create([{
+      userId: targetUserId,
+      planId,
+      startDate,
+      endDate: finalEndDate,
+      autoRenew: Boolean(autoRenew),
+      classesRemaining,
+      childId,
+      preferredDays,
+      preferredSlots,
+      sessionsPerWeek,
+      paymentId,
+      locationId: plan.locationId
+    }], { session });
 
-    let resolvedPaymentMethod = 'center';
-    if (paymentId) {
-      const payRec = await Payment.findById(paymentId);
-      if (payRec) resolvedPaymentMethod = payRec.paymentMethod;
+    if (preferredDays && preferredSlots && preferredDays.length > 0) {
+      const sessionIds = await generateMembershipSessions(primaryMembership, plan, session);
+      primaryMembership.generatedSessions = sessionIds;
+      await primaryMembership.save({ session });
     }
 
-    const bookingData = {
+    let payRec = null;
+    if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+        payRec = await Payment.findById(paymentId).session(session);
+    }
+
+    let resolvedPaymentMethod = payRec ? payRec.paymentMethod : 'center';
+    let promotionId = payRec ? payRec.promotionId : null;
+    let discountAmount = payRec ? payRec.discountAmount || 0 : 0;
+
+    const primaryChild = await Child.findById(childId).session(session);
+    const participants = [];
+    
+    if (primaryChild) {
+      participants.push({
+        name: primaryChild.name,
+        age: primaryChild.age,
+        gender: primaryChild.gender,
+        relation: 'Child',
+        childId: primaryChild._id
+      });
+    } else {
+      participants.push({
+        name: req.user.name || 'Account Holder',
+        age: 18,
+        gender: 'other',
+        relation: 'Self'
+      });
+    }
+
+    let bogoMembershipId = null;
+    if (claimBogo && !isConsolidatedBogo) {
+       const finalBogoChildId = bogoChildId || childId;
+       const bogoChild = await Child.findById(finalBogoChildId).session(session);
+       
+       const [freeMembership] = await Membership.create([{
+          userId: targetUserId,
+          planId,
+          startDate,
+          endDate,
+          autoRenew: false,
+          classesRemaining: plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined),
+          childId: finalBogoChildId,
+          preferredDays,
+          preferredSlots,
+          sessionsPerWeek,
+          paymentId,
+          locationId: plan.locationId,
+          isBogoFree: true
+       }], { session });
+
+       bogoMembershipId = freeMembership._id;
+
+       if (preferredDays && preferredSlots && preferredDays.length > 0) {
+          const freeSessionIds = await generateMembershipSessions(freeMembership, plan, session);
+          freeMembership.generatedSessions = freeSessionIds;
+          await freeMembership.save({ session });
+       }
+
+       if (bogoChild) {
+          participants.push({
+             name: bogoChild.name,
+             age: bogoChild.age,
+             gender: bogoChild.gender,
+             relation: 'Child',
+             childId: bogoChild._id
+          });
+       }
+    }
+
+    const bookingNumber = await getNextBookingNumber();
+    const [bookingRec] = await Booking.create([{
       userId: targetUserId,
       bookingNumber,
       bookingType: 'package',
       planId: plan._id,
       date: startDate,
-      totalAmount: plan.price,
+      totalAmount: Math.max(0, plan.price - discountAmount),
       status: 'confirmed',
       paymentStatus: 'completed',
       paymentMethod: resolvedPaymentMethod,
       paymentId: paymentId,
       locationId: plan.locationId,
-      participants: child ? [{
-        name: child.name,
-        age: child.age,
-        gender: child.gender,
-        relation: 'Child',
-        childId: child._id
-      }] : []
-    };
+      promotionId,
+      discountAmount,
+      participants
+    }], { session });
 
-    if (isStaff) {
-      bookingData.processedBy = req.user._id;
-      bookingData.processedByRole = req.user.role;
+    primaryMembership.bookingId = bookingRec._id;
+    await primaryMembership.save({ session });
+
+    if (bogoMembershipId) {
+       await Membership.findByIdAndUpdate(bogoMembershipId, { bookingId: bookingRec._id }, { session });
     }
 
-    const bookingRec = await Booking.create(bookingData);
-    created.bookingId = bookingRec._id;
-    await created.save();
+    const invoiceNumber = await getNextInvoiceNumber();
+    const invoiceItems = [{
+       description: `${plan.name} - Package Enrollment`,
+       quantity: 1,
+       unitPrice: plan.price,
+       total: plan.price
+    }];
+
+    if (claimBogo) {
+       invoiceItems.push({
+          description: isConsolidatedBogo ? `BOGO Boost - Double Access` : `BOGO Free Item - ${plan.name}`,
+          quantity: 1,
+          unitPrice: 0,
+          total: 0
+       });
+    }
+
+    await Invoice.create([{
+       invoiceNumber,
+       bookingId: bookingRec._id,
+       userId: targetUserId,
+       amount: bookingRec.totalAmount,
+       status: 'paid',
+       locationId: plan.locationId,
+       items: invoiceItems
+    }], { session });
+
+    await session.commitTransaction();
+
+    const final = await Membership.findById(primaryMembership._id)
+      .populate('userId', 'name email firstName lastName')
+      .populate('planId')
+      .populate('childId')
+      .populate({ path: 'bookingId', select: 'participants bookingNumber' })
+      .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } });
+
+    res.status(201).json(final);
   } catch (err) {
-    console.error('[Membership -> Booking Sync] Failed:', err.message);
-  }
-
-  const final = await Membership.findById(created._id)
-    .populate('userId', 'name email firstName lastName')
-    .populate('planId')
-    .populate('childId')
-    .populate({
-      path: 'bookingId',
-      select: 'participants bookingNumber'
-    })
-    .populate({
-      path: 'generatedSessions',
-      populate: { path: 'trainerId', select: 'name' }
+    if (session.inTransaction()) {
+        await session.abortTransaction();
+    }
+    console.error('[Transaction Abort] Internal Error:', err.message);
+    res.status(500).json({ 
+        message: 'Sync failed: ' + (err.message || 'Internal logic error'), 
+        details: 'Payment recorded (' + paymentId + ') but membership could not be finalized. Please contact support.',
+        paymentId 
     });
-
-  res.status(201).json(final);
+  } finally {
+    session.endSession();
+  }
 });
 
 export const updateMembership = asyncHandler(async (req, res) => {

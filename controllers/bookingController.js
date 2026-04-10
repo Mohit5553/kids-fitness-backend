@@ -5,7 +5,7 @@ import ClassModel from '../models/Class.js';
 import SalesOrder from '../models/SalesOrder.js';
 import Location from '../models/Location.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
-import { sendBookingConfirmationEmail, sendBookingUpdateEmail } from '../utils/mailer.js';
+import { sendBookingConfirmationEmail, sendBookingUpdateEmail, sendSessionReminderEmail } from '../utils/mailer.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import Invoice from '../models/Invoice.js';
@@ -13,6 +13,7 @@ import Attendance from '../models/Attendance.js';
 import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
 import Membership from '../models/Membership.js';
 import Child from '../models/Child.js';
+import Promotion from '../models/Promotion.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -22,6 +23,7 @@ export const getMyBookings = asyncHandler(async (req, res) => {
     ]
   })
     .populate('classId', 'title price')
+    .populate('planId', 'name price priceMonthly')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
     .sort({ createdAt: -1 });
   res.json(bookings);
@@ -188,7 +190,7 @@ export const createBooking = asyncHandler(async (req, res) => {
 
   // Generate Booking Number (BK-YYMMDD-XXXX)
   const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-  const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const randomStr = Math.random().toString(36).substring(2, 12).toUpperCase(); // 10 characters
   const bookingNumber = `BK-${dateStr}-${randomStr}`;
 
   const bookingData = {
@@ -230,6 +232,24 @@ export const createBooking = asyncHandler(async (req, res) => {
   // OFFICIAL INVOICE GENERATION
   const invoiceNumber = await getNextInvoiceNumber();
 
+  const invoiceItems = [
+    {
+      description: `${classItem.title} - Session Booking`,
+      quantity: participants.length,
+      unitPrice: classItem.price || 0,
+      total: totalAmount
+    }
+  ];
+
+  if (req.body.claimBogo) {
+    invoiceItems.push({
+      description: `BOGO Free Item - ${classItem.title}`,
+      quantity: participants.length,
+      unitPrice: 0,
+      total: 0
+    });
+  }
+
   const invoiceData = {
     invoiceNumber,
     bookingId: created._id,
@@ -238,14 +258,7 @@ export const createBooking = asyncHandler(async (req, res) => {
     amount: (totalAmount - (discountAmount || 0)),
     status: created.status === 'confirmed' ? 'paid' : 'unpaid',
     locationId: resolvedLocationId,
-    items: [
-      {
-        description: `${classItem.title} - Session Booking`,
-        quantity: participants.length,
-        unitPrice: classItem.price || 0,
-        total: totalAmount
-      }
-    ]
+    items: invoiceItems
   };
 
   if (discountAmount > 0) {
@@ -276,7 +289,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
   // Create a Payment record for both online and center payments so it shows in the Payments list
-  await Payment.create({
+  const paymentRec = await Payment.create({
     userId: created.userId,
     bookingId: created._id,
     amount: (totalAmount - (discountAmount || 0)),
@@ -287,6 +300,8 @@ export const createBooking = asyncHandler(async (req, res) => {
     locationId: resolvedLocationId,
     processedBy: req.user?._id
   });
+
+  const paymentId = paymentRec._id;
 
   // Update session occupancy if applicable
   if (session) {
@@ -310,6 +325,7 @@ export const createBooking = asyncHandler(async (req, res) => {
       customerName: userForEmail.name
     });
   }
+
 
   res.status(201).json(created);
 });
@@ -773,6 +789,24 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
       // INVOICE GENERATION for each booking in the group
       const invoiceNumber = await getNextInvoiceNumber();
 
+      const invoiceItems = [
+        {
+          description: `${classItem.title} - Group Booking (${p.name})`,
+          quantity: 1,
+          unitPrice: classItem.price,
+          total: classItem.price
+        }
+      ];
+
+      if (req.body.claimBogo) {
+        invoiceItems.push({
+          description: `BOGO Free Item - ${classItem.title}`,
+          quantity: 1,
+          unitPrice: 0,
+          total: 0
+        });
+      }
+
       const invoiceData = {
         invoiceNumber,
         bookingId: b._id,
@@ -780,14 +814,7 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
         amount: classItem.price,
         status: paymentMethod === 'online' ? 'paid' : 'unpaid',
         locationId,
-        items: [
-          {
-            description: `${classItem.title} - Group Booking (${p.name})`,
-            quantity: 1,
-            unitPrice: classItem.price,
-            total: classItem.price
-          }
-        ]
+        items: invoiceItems
       };
 
       if (discountAmount) {
@@ -843,3 +870,43 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
   });
 });
 
+
+export const sendReminder = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id)
+    .populate('userId', 'name email firstName')
+    .populate('classId', 'title')
+    .populate({
+      path: 'sessionId',
+      select: 'startTime location classId',
+      populate: { path: 'classId', select: 'title' }
+    });
+
+  if (!booking) {
+    res.status(404);
+    throw new Error('Booking not found');
+  }
+
+  // Fallback for classData: use booking.classId or session.classId
+  const classData = booking.classId || booking.sessionId?.classId;
+  const sessionData = booking.sessionId;
+  const userData = booking.userId || booking.guestDetails;
+
+  if (!classData || !classData.title) {
+    res.status(400);
+    throw new Error('Could not determine class details for this reminder');
+  }
+
+  if (!userData || (!userData.email && !booking.guestDetails?.email)) {
+    res.status(400);
+    throw new Error('No contact email found for this booking');
+  }
+
+  const sent = await sendSessionReminderEmail(booking, classData, sessionData, userData);
+
+  if (!sent) {
+    res.status(500);
+    throw new Error('Failed to send reminder email');
+  }
+
+  res.json({ message: 'Reminder sent successfully' });
+});

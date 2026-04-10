@@ -4,16 +4,18 @@ import Session from '../models/Session.js';
  * Generates sessions for a membership based on user preferences.
  * @param {Object} membership - The membership document
  * @param {Object} plan - The plan document
+ * @param {Object} [dbSession] - Optional Mongoose session for atomic transactions
  * @returns {Array} List of created session IDs
  */
-export const generateMembershipSessions = async (membership, plan) => {
+export const generateMembershipSessions = async (membership, plan, dbSession = null) => {
   const { startDate, endDate, preferredDays, preferredSlots, sessionsPerWeek, childId, locationId } = membership;
   const { classesIncluded, sessionType } = plan;
 
   const sessions = [];
   let currentDate = new Date(startDate);
   let sessionsCreated = 0;
-  const maxSessions = classesIncluded || 999; // Fallback if unlimited
+  // Prioritize membership.classesRemaining for 'Boosted' memberships, fallback to plan default
+  const maxSessions = membership.classesRemaining || classesIncluded || 999; 
 
   // Map day names to numbers (0=Sun, 1=Mon, ...)
   const dayMap = {
@@ -30,17 +32,36 @@ export const generateMembershipSessions = async (membership, plan) => {
 
     if (targetDays.includes(dayOfWeek)) {
       // For each preferred slot on this day
+      // Robust Time Parsing
       for (const slot of preferredSlots) {
         if (sessionsCreated >= maxSessions) break;
 
-        // Parse slot (e.g. "10:00 AM") to set time
-        const [time, modifier] = slot.split(' ');
-        let [hours, minutes] = time.split(':');
-        if (hours === '12') hours = '0';
-        if (modifier === 'PM') hours = parseInt(hours, 10) + 12;
+        // Use regex for robust extraction: handles "09:00 AM", "9:00am", "10:30 ", etc.
+        const timeMatch = slot.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/);
+        
+        if (!timeMatch) {
+          console.warn(`[schedulingService] Skipping invalid time slot format: "${slot}"`);
+          continue;
+        }
+
+        let [_, hoursStr, minutesStr, modifier] = timeMatch;
+        let hours = parseInt(hoursStr, 10);
+        const minutes = parseInt(minutesStr, 10);
+
+        if (modifier) {
+          modifier = modifier.toUpperCase();
+          if (hours === 12 && modifier === 'AM') hours = 0;
+          if (hours !== 12 && modifier === 'PM') hours += 12;
+        }
 
         const sessionDate = new Date(currentDate);
-        sessionDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+        sessionDate.setHours(hours, minutes, 0, 0);
+
+        // Final check for Invalid Date
+        if (isNaN(sessionDate.getTime())) {
+            console.warn(`[schedulingService] Generated Invalid Date for slot: "${slot}"`);
+            continue;
+        }
 
         // Avoid creating sessions in the past if startDate is today
         if (sessionDate < new Date()) {
@@ -62,8 +83,8 @@ export const generateMembershipSessions = async (membership, plan) => {
                 sessionData.trainerStatus = 'accepted'; // Auto-accept since it's a fixed assignment
             }
 
-            const session = await Session.create(sessionData);
-            sessions.push(session._id);
+            const session = await Session.create([sessionData], { session: dbSession });
+            sessions.push(session[0]._id);
             sessionsCreated++;
         }
       }

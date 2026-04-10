@@ -136,12 +136,9 @@ export const calculateDiscount = (promotion, orderDetails) => {
       }
       break;
     case 'bogo':
-      // BOGO logic: If buying 1, get 1 free means essentially 100% off the second item
-      // In a single purchase context, it's often represented as 50% off if buying 2
-      // But user said "Buy 1 get 1 another classes membership free"
-      // This implies cross-item. If both are in the "cart", the cheaper or specific one is free.
-      // For now, let's treat it as a fixed discount if criteria met.
-      discountAmount = amount; // Simple implementation: specified "Get" item is free
+      // Buy 1 Get 1: Customer pays 100% price for the first item.
+      // Second item is fulfilled automatically in the membership/booking controllers.
+      discountAmount = 0;
       break;
     case 'bulk':
       if (quantity >= promotion.minQuantity) {
