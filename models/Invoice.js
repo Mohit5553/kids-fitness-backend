@@ -18,10 +18,15 @@ const invoiceSchema = new mongoose.Schema(
         description: { type: String, required: true },
         quantity: { type: Number, default: 1 },
         unitPrice: { type: Number, required: true },
+        taxAmount: { type: Number, default: 0 },
         total: { type: Number, required: true }
       }
     ],
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    taxAmount: { type: Number, default: 0 },
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    discountAmount: { type: Number, default: 0 },
+    couponAmount: { type: Number, default: 0 },
+    couponCode: { type: String }
   },
   { timestamps: true }
 );

@@ -138,7 +138,16 @@ export const getSessionById = asyncHandler(async (req, res) => {
     throw new Error('Not authorized to view this private session');
   }
 
-  res.json(session);
+  // Add live bookedParticipants count
+  const totalBookings = await Booking.countDocuments({
+    sessionId: session._id,
+    status: { $ne: 'cancelled' }
+  });
+
+  const sessionObj = session.toObject();
+  sessionObj.bookedParticipants = totalBookings;
+
+  res.json(sessionObj);
 });
 
 const checkTrainerConflict = async (res, trainerId, startTime, endTime, sessionId = null) => {

@@ -13,6 +13,7 @@ const classSchema = new mongoose.Schema(
     price: { type: Number, required: true },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     imageUrl: { type: String },
+    taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }
   },
   { timestamps: true }

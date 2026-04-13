@@ -205,7 +205,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
 });
 
 export const createMembership = asyncHandler(async (req, res) => {
-  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId } = req.body;
+  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId, couponCode, couponAmount, membershipUnits: reqUnits } = req.body;
   if (!planId) {
     res.status(400);
     throw new Error('planId is required');
@@ -216,6 +216,11 @@ export const createMembership = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Plan not found');
   }
+
+  // Handle automatic scaling if not explicitly provided (e.g. from older clients or direct API)
+  const totalWeeklySpots = preferredDays.length * (preferredSlots?.length || 1);
+  const planCapacity = plan.classesIncluded || 1;
+  const membershipUnits = reqUnits || Math.max(1, Math.ceil(totalWeeklySpots / planCapacity));
 
   const startDate = new Date();
   let endDate;
@@ -232,7 +237,8 @@ export const createMembership = asyncHandler(async (req, res) => {
     endDate = addWeeks(startDate, plan.durationWeeks);
   }
 
-  let classesRemaining = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined);
+  let baseClasses = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : 0);
+  let classesRemaining = baseClasses * membershipUnits;
   let finalEndDate = endDate;
   let isConsolidatedBogo = false;
 
@@ -270,7 +276,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       preferredSlots,
       sessionsPerWeek,
       paymentId,
-      locationId: plan.locationId
+      locationId: plan.locationId,
+      membershipUnits
     }], { session });
 
     if (preferredDays && preferredSlots && preferredDays.length > 0) {
@@ -349,13 +356,41 @@ export const createMembership = asyncHandler(async (req, res) => {
     }
 
     const bookingNumber = await getNextBookingNumber();
+
+    // TAX & PRICE CALCULATION
+    const rawBaseAmount = plan.price * membershipUnits;
+    const netBaseAmount = Math.max(0, rawBaseAmount - discountAmount - (couponAmount || 0));
+
+    let taxAmount = 0;
+    let activeTax = null;
+    if (plan.taxId) {
+       activeTax = await Tax.findById(plan.taxId);
+    } else if (plan.locationId) {
+       activeTax = await Tax.findOne({ 
+          locationId: plan.locationId, 
+          status: 'active',
+          $or: [
+            { validityEnd: { $exists: false } },
+            { validityEnd: { $gte: new Date() } }
+          ]
+       });
+    }
+
+    if (activeTax) {
+       taxAmount = calculateTax(netBaseAmount, activeTax);
+    }
+
+    const totalAmount = (activeTax?.calculationMethod === 'inclusive') ? netBaseAmount : (netBaseAmount + taxAmount);
+
     const [bookingRec] = await Booking.create([{
       userId: targetUserId,
       bookingNumber,
       bookingType: 'package',
       planId: plan._id,
       date: startDate,
-      totalAmount: Math.max(0, plan.price - discountAmount),
+      totalAmount,
+      taxAmount,
+      taxId: activeTax?._id,
       status: 'confirmed',
       paymentStatus: 'completed',
       paymentMethod: resolvedPaymentMethod,
@@ -363,6 +398,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       locationId: plan.locationId,
       promotionId,
       discountAmount,
+      couponCode,
+      couponAmount,
       participants
     }], { session });
 
@@ -376,17 +413,36 @@ export const createMembership = asyncHandler(async (req, res) => {
     const invoiceNumber = await getNextInvoiceNumber();
     const invoiceItems = [{
        description: `${plan.name} - Package Enrollment`,
-       quantity: 1,
+       quantity: membershipUnits,
        unitPrice: plan.price,
-       total: plan.price
+       taxAmount: (activeTax && !isConsolidatedBogo) ? (taxAmount / membershipUnits) : 0,
+       total: plan.price * membershipUnits
     }];
 
-    if (claimBogo) {
+    if (claimBogo && !isConsolidatedBogo) {
        invoiceItems.push({
-          description: isConsolidatedBogo ? `BOGO Boost - Double Access` : `BOGO Free Item - ${plan.name}`,
-          quantity: 1,
+          description: `BOGO Promo - Free Item`,
+          quantity: membershipUnits,
           unitPrice: 0,
           total: 0
+       });
+    }
+
+    if (discountAmount > 0) {
+       invoiceItems.push({
+          description: `Promotion Discount`,
+          quantity: 1,
+          unitPrice: -discountAmount,
+          total: -discountAmount
+       });
+    }
+
+    if (couponAmount > 0) {
+       invoiceItems.push({
+          description: `Cash Voucher Applied (${couponCode})`,
+          quantity: 1,
+          unitPrice: -couponAmount,
+          total: -couponAmount
        });
     }
 
@@ -394,11 +450,52 @@ export const createMembership = asyncHandler(async (req, res) => {
        invoiceNumber,
        bookingId: bookingRec._id,
        userId: targetUserId,
-       amount: bookingRec.totalAmount,
+       amount: totalAmount,
+       taxAmount: taxAmount,
        status: 'paid',
-       locationId: plan.locationId,
-       items: invoiceItems
+       items: invoiceItems,
+       locationId: plan.locationId
     }], { session });
+    
+    // COUPON GENERATION LOGIC (Cash Deposit Promo)
+    if (promotionId) {
+       const promo = await Promotion.findById(promotionId).session(session);
+       if (promo && promo.promoType === 'cash_deposit') {
+          const couponValue = (promo.discountType === 'percentage') 
+             ? (plan.price * (promo.discountValue / 100))
+             : Math.min(plan.price, promo.discountValue);
+          
+          if (couponValue > 0) {
+             const generatedCode = `CPN-M-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+             const expiryDate = new Date();
+             expiryDate.setDate(expiryDate.getDate() + 90);
+
+             await Coupon.create([{
+                code: generatedCode,
+                userId: targetUserId,
+                amount: Math.round(couponValue * 100) / 100,
+                expiryDate,
+                sourceBookingId: bookingRec._id,
+                status: 'active'
+             }], { session });
+          }
+       }
+    }
+
+    // COUPON REDEMPTION LOGIC
+    if (couponCode) {
+       const redeemedCoupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: 'active' }).session(session);
+       if (redeemedCoupon) {
+          redeemedCoupon.status = 'redeemed';
+          redeemedCoupon.redeemBookingId = bookingRec._id;
+          redeemedCoupon.redeemedAt = new Date();
+          // Assign user if it was an anonymous voucher
+          if (!redeemedCoupon.userId) {
+             redeemedCoupon.userId = targetUserId;
+          }
+          await redeemedCoupon.save({ session });
+       }
+    }
 
     await session.commitTransaction();
 

@@ -16,6 +16,9 @@ const paymentSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' },
     discountAmount: { type: Number, default: 0 },
+    couponCode: { type: String },
+    couponAmount: { type: Number, default: 0 },
+    membershipUnits: { type: Number, default: 1 },
     processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }

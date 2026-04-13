@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema(
     points: { type: Number, default: 0 },
     isCorporate: { type: Boolean, default: false },
     companyName: { type: String },
+    tradeLicenseNo: { type: String },
+    taxNumber: { type: String },
+    companyAddress: { type: String },
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }

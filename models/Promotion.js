@@ -7,7 +7,7 @@ const PromotionSchema = new mongoose.Schema(
     promoType: {
       type: String,
       required: true,
-      enum: ['flash', 'percentage', 'cash', 'bogo', 'bulk', 'lifestyle', 'tiered'],
+      enum: ['flash', 'percentage', 'cash', 'bogo', 'bulk', 'lifestyle', 'tiered', 'cash_deposit'],
     },
     discountType: {
       type: String,

@@ -130,7 +130,7 @@ export const getAllPayments = asyncHandler(async (req, res) => {
 });
 
 export const createPayment = asyncHandler(async (req, res) => {
-  const { bookingId, planId, membershipId, amount, paymentMethod, reference, last4, promotionId, discountAmount, userId, processedBy } = req.body;
+  const { bookingId, planId, membershipId, amount, paymentMethod, reference, last4, promotionId, discountAmount, couponAmount, couponCode, userId, processedBy, membershipUnits } = req.body;
   if (!amount) {
     res.status(400);
     throw new Error('Amount is required');
@@ -163,6 +163,9 @@ export const createPayment = asyncHandler(async (req, res) => {
     locationId,
     promotionId,
     discountAmount,
+    couponCode,
+    couponAmount,
+    membershipUnits,
     processedBy: processedBy || req.user._id
   });
 
@@ -176,7 +179,7 @@ export const createPayment = asyncHandler(async (req, res) => {
 });
 
 export const createBookingPayment = asyncHandler(async (req, res) => {
-  const { bookingId, paymentMethod, reference, last4, promotionId, discountAmount } = req.body;
+  const { bookingId, paymentMethod, reference, last4, promotionId, discountAmount, couponAmount, couponCode } = req.body;
   if (!bookingId) {
     res.status(400);
     throw new Error('bookingId is required');
@@ -204,7 +207,9 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
     last4,
     locationId: booking.locationId,
     promotionId,
-    discountAmount
+    discountAmount,
+    couponCode,
+    couponAmount
   });
 
   booking.status = 'confirmed';
