@@ -271,3 +271,67 @@ export const resetPassword = asyncHandler(async (req, res) => {
     message: 'Password reset successful. You can now log in.'
   });
 });
+export const updateMe = asyncHandler(async (req, res) => {
+  console.log('UpdateMe Request Body:', req.body);
+  console.log('UpdateMe User ID:', req.user?._id);
+
+  const user = await User.findById(req.user._id);
+
+  if (user) {
+    // Explicitly update fields and handle potential nulls/empty strings
+    user.name = req.body.name || user.name;
+    user.firstName = req.body.firstName !== undefined ? req.body.firstName : user.firstName;
+    user.lastName = req.body.lastName !== undefined ? req.body.lastName : user.lastName;
+    user.phone = req.body.phone !== undefined ? req.body.phone : user.phone;
+    user.gender = req.body.gender || user.gender;
+    user.birthDate = req.body.birthDate || user.birthDate;
+    user.address = req.body.address !== undefined ? req.body.address : user.address;
+    user.city = req.body.city !== undefined ? req.body.city : user.city;
+    user.country = req.body.country || user.country;
+    user.avatarUrl = req.body.avatarUrl !== undefined ? req.body.avatarUrl : user.avatarUrl;
+    user.instagram = req.body.instagram !== undefined ? req.body.instagram : user.instagram;
+    user.companyName = req.body.companyName !== undefined ? req.body.companyName : user.companyName;
+    user.tradeLicenseNo = req.body.tradeLicenseNo !== undefined ? req.body.tradeLicenseNo : user.tradeLicenseNo;
+    user.taxNumber = req.body.taxNumber !== undefined ? req.body.taxNumber : user.taxNumber;
+    user.companyAddress = req.body.companyAddress !== undefined ? req.body.companyAddress : user.companyAddress;
+
+    if (req.body.password) {
+      console.log('Updating password for user:', user.email);
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(req.body.password, salt);
+    }
+
+    try {
+      const updatedUser = await user.save();
+      console.log('User updated successfully:', updatedUser.email);
+
+      res.json({
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
+        avatarUrl: updatedUser.avatarUrl,
+        gender: updatedUser.gender,
+        birthDate: updatedUser.birthDate,
+        address: updatedUser.address,
+        city: updatedUser.city,
+        country: updatedUser.country,
+        companyName: updatedUser.companyName,
+        tradeLicenseNo: updatedUser.tradeLicenseNo,
+        taxNumber: updatedUser.taxNumber,
+        companyAddress: updatedUser.companyAddress,
+        token: generateToken(updatedUser._id),
+      });
+    } catch (saveErr) {
+      console.error('Mongoose Save Error:', saveErr.message);
+      res.status(400);
+      throw new Error(`Profile update failed: ${saveErr.message}`);
+    }
+  } else {
+    res.status(404);
+    throw new Error('User not found');
+  }
+});

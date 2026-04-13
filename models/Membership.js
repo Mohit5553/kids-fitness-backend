@@ -17,7 +17,8 @@ const membershipSchema = new mongoose.Schema(
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
     notes: { type: String },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    membershipUnits: { type: Number, default: 1 }
   },
   { timestamps: true }
 );

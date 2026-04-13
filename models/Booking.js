@@ -48,8 +48,12 @@ const bookingSchema = new mongoose.Schema(
       finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
     },
     reminderSent: { type: Boolean, default: false },
+    discountAmount: { type: Number, default: 0 },
     promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' },
-    discountAmount: { type: Number, default: 0 }
+    taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
+    taxAmount: { type: Number, default: 0 },
+    couponCode: { type: String },
+    couponAmount: { type: Number, default: 0 }
   },
   { timestamps: true }
 );

@@ -39,6 +39,8 @@ import invoiceRoutes from './routes/invoiceRoutes.js';
 import settingRoutes from './routes/settingRoutes.js';
 import extensionRoutes from './routes/extensionRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
+import taxRoutes from './routes/taxRoutes.js';
+import couponRoutes from './routes/couponRoutes.js';
 import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
@@ -106,6 +108,8 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/extensions', extensionRoutes);
 app.use('/api/promotions', promotionRoutes);
+app.use('/api/taxes', taxRoutes);
+app.use('/api/coupons', couponRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

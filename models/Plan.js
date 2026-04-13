@@ -21,7 +21,8 @@ const planSchema = new mongoose.Schema(
     tagline: { type: String },
     isFeatured: { type: Boolean, default: false },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
-    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' }
+    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
+    taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' }
   },
   { timestamps: true }
 );

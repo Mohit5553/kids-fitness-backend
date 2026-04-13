@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
@@ -14,6 +15,9 @@ import { getNextInvoiceNumber } from '../utils/sequenceGenerator.js';
 import Membership from '../models/Membership.js';
 import Child from '../models/Child.js';
 import Promotion from '../models/Promotion.js';
+import Tax from '../models/Tax.js';
+import { calculateTax } from '../utils/taxCalculator.js';
+import Coupon from '../models/Coupon.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({
@@ -105,7 +109,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
 });
 
 export const createBooking = asyncHandler(async (req, res) => {
-  const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails, userId, promotionId, discountAmount } = req.body;
+  const { participants, classId, date, sessionId, paymentMethod, paymentStatus, guestDetails, userId, promotionId } = req.body;
 
   if (!req.user && (!guestDetails || !guestDetails.name || !guestDetails.email)) {
     res.status(400);
@@ -138,9 +142,18 @@ export const createBooking = asyncHandler(async (req, res) => {
     resolvedDate = session.startTime;
     resolvedLocationId = session.locationId;
 
-    // Capacity Check
-    const remainingCapacity = session.capacity - (session.bookedParticipants || 0);
-    if (participants.length > remainingCapacity) {
+    // Capacity Check (Bypass for admins/staff)
+    const bookingUserRole = (req.user?.role || '').toLowerCase().replace(/[\s_-]/g, '');
+    const isStaffBooking = ['admin', 'manager', 'cashier'].some(r => bookingUserRole.includes(r));
+    
+    // LIVE COUNT Check: Don't trust the session.bookedParticipants field
+    const liveBookedCount = await mongoose.model('Booking').countDocuments({
+      sessionId: session._id,
+      status: { $ne: 'cancelled' }
+    });
+    
+    const remainingCapacity = session.capacity - liveBookedCount;
+    if (participants.length > remainingCapacity && !isStaffBooking) {
       res.status(400);
       const msg = remainingCapacity <= 0 
         ? 'This session is full' 
@@ -162,7 +175,38 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
   // Calculate Total Amount
-  const totalAmount = (classItem.price || 0) * participants.length;
+  const discountAmount = Number(req.body.discountAmount) || 0;
+  const couponAmount = Number(req.body.couponAmount) || 0;
+  const rawBaseAmount = (classItem.price || 0) * participants.length;
+  
+  // Tax is calculated after all price-reducing discounts
+  const netBaseAmount = Math.max(0, rawBaseAmount - discountAmount - couponAmount);
+  
+  let taxAmount = 0;
+  let activeTax = null;
+
+  if (classItem.taxId) {
+    activeTax = await Tax.findById(classItem.taxId);
+  } else if (resolvedLocationId) {
+    activeTax = await Tax.findOne({ 
+      locationId: resolvedLocationId, 
+      status: 'active',
+      $or: [
+        { validityEnd: { $exists: false } },
+        { validityEnd: { $gte: new Date() } }
+      ]
+    });
+  }
+
+  if (activeTax) {
+    // calculateTax uses the provided numeric price as base
+    taxAmount = calculateTax(netBaseAmount, activeTax);
+  }
+  
+  // Final total paid by customer
+  const totalAmount = activeTax?.calculationMethod === 'inclusive' 
+    ? netBaseAmount 
+    : netBaseAmount + taxAmount;
 
   // Age and Gender Validation
   for (const p of participants) {
@@ -200,13 +244,18 @@ export const createBooking = asyncHandler(async (req, res) => {
     sessionId: resolvedSessionId,
     date: resolvedDate,
     totalAmount,
+    taxAmount,
+    taxId: activeTax?._id || classItem.taxId,
     locationId: resolvedLocationId,
     paymentMethod,
     paymentStatus,
     paymentDate: paymentStatus === 'completed' ? new Date() : undefined,
     status: paymentStatus === 'completed' ? 'confirmed' : 'pending',
     promotionId,
-    discountAmount: discountAmount || 0
+    promotionId,
+    discountAmount: discountAmount || 0,
+    couponCode: req.body.couponCode,
+    couponAmount: req.body.couponAmount || 0
   };
 
   if (req.user) {
@@ -222,6 +271,13 @@ export const createBooking = asyncHandler(async (req, res) => {
     if (isStaff) {
       bookingData.processedBy = req.user._id;
       bookingData.processedByRole = req.user.role;
+
+      // Automated Confirmation for Center Cash payments by Staff
+      if (paymentMethod === 'center_cash') {
+        bookingData.paymentStatus = 'completed';
+        bookingData.status = 'confirmed';
+        bookingData.paymentDate = new Date();
+      }
     }
   } else {
     bookingData.guestDetails = guestDetails;
@@ -255,10 +311,14 @@ export const createBooking = asyncHandler(async (req, res) => {
     bookingId: created._id,
     userId: created.userId,
     guestDetails: created.guestDetails,
-    amount: (totalAmount - (discountAmount || 0)),
+    amount: totalAmount,
     status: created.status === 'confirmed' ? 'paid' : 'unpaid',
     locationId: resolvedLocationId,
-    items: invoiceItems
+    items: invoiceItems,
+    taxAmount: taxAmount,
+    discountAmount: discountAmount || 0,
+    couponAmount: req.body.couponAmount || 0,
+    couponCode: req.body.couponCode
   };
 
   if (discountAmount > 0) {
@@ -270,13 +330,22 @@ export const createBooking = asyncHandler(async (req, res) => {
     });
   }
 
+  if (req.body.couponAmount > 0) {
+    invoiceData.items.push({
+      description: `Cash Voucher Applied (${req.body.couponCode})`,
+      quantity: 1,
+      unitPrice: -req.body.couponAmount,
+      total: -req.body.couponAmount
+    });
+  }
+
   await Invoice.create(invoiceData);
 
   // If paying at center, generate a SalesOrder
   if (paymentMethod === 'center') {
     const orderData = {
       bookingId: created._id,
-      amount: (totalAmount - (discountAmount || 0)),
+      amount: totalAmount,
       status: 'pending',
       locationId: resolvedLocationId
     };
@@ -292,7 +361,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   const paymentRec = await Payment.create({
     userId: created.userId,
     bookingId: created._id,
-    amount: (totalAmount - (discountAmount || 0)),
+    amount: totalAmount,
     discountAmount: discountAmount || 0,
     promotionId: promotionId,
     paymentMethod: paymentMethod || 'center',
@@ -327,6 +396,49 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
 
+  // COUPON GENERATION LOGIC (Cash Deposit Promo)
+  if (promotionId) {
+    const promo = await Promotion.findById(promotionId);
+    if (promo && promo.promoType === 'cash_deposit') {
+      const couponValue = (promo.discountType === 'percentage') 
+        ? (totalAmount * (promo.discountValue / 100))
+        : Math.min(totalAmount, promo.discountValue);
+      
+      if (couponValue > 0) {
+        const couponCode = `CPN-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 90); // 90 days validity
+
+        await Coupon.create({
+          code: couponCode,
+          userId: created.userId,
+          amount: Math.round(couponValue * 100) / 100,
+          expiryDate,
+          sourceBookingId: created._id,
+          status: 'active'
+        });
+      }
+    }
+  }
+
+  // COUPON REDEMPTION LOGIC (Applying a coupon)
+  if (req.body.couponCode) {
+    const redeemedCoupon = await Coupon.findOne({ 
+      code: req.body.couponCode.toUpperCase(), 
+      status: 'active' 
+    });
+    if (redeemedCoupon) {
+      redeemedCoupon.status = 'redeemed';
+      redeemedCoupon.redeemBookingId = created._id;
+      redeemedCoupon.redeemedAt = new Date();
+      // Assign user if it was an anonymous voucher
+      if (!redeemedCoupon.userId) {
+        redeemedCoupon.userId = created.userId;
+      }
+      await redeemedCoupon.save();
+    }
+  }
+
   res.status(201).json(created);
 });
 
@@ -356,28 +468,29 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     throw new Error('Accounts cannot finalize until class attendance is verified');
   }
 
-  // Handle capacity decrement on cancellation
+  // Handle capacity decrement on cancellation (Self-syncing via countDocuments)
   if (status === 'cancelled' && oldStatus !== 'cancelled' && booking.sessionId) {
-    await Session.findByIdAndUpdate(booking.sessionId, {
-      $inc: { bookedParticipants: -booking.participants.length }
-    });
+    // No manual decrement needed; live queries handle this
   }
   // Handle capacity increment if re-activating
   if (oldStatus === 'cancelled' && status && status !== 'cancelled' && booking.sessionId) {
     const session = await Session.findById(booking.sessionId);
     if (session) {
-      const remaining = session.capacity - (session.bookedParticipants || 0);
+      const liveCount = await mongoose.model('Booking').countDocuments({
+        sessionId: session._id,
+        status: { $ne: 'cancelled' }
+      });
+      const remaining = session.capacity - liveCount;
       if (booking.participants.length > remaining) {
         res.status(400);
         throw new Error('Cannot restore booking: session is now full');
       }
-      session.bookedParticipants += booking.participants.length;
-      await session.save();
+      // No manual increment needed
     }
   }
 
   // Update Lifecycle tracking
-  const userRole = (req.user?.role || '').toLowerCase();
+  const normalizedRole = (req.user.role || '').toLowerCase().replace(/[\s_-]/g, '');
   booking.status = status || booking.status;
 
   if (status === 'confirmed') {
@@ -476,7 +589,9 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
   }
 
   // Record who processed the latest confirmation
-  const isStaff = req.user && req.user.role !== 'parent' && req.user.role !== 'customer';
+  const isStaff = ['admin', 'manager', 'cashier'].some(r => normalizedRole.includes(r)) ||
+    normalizedRole === 'superadmin' ||
+    (req.user && req.user.role !== 'parent' && req.user.role !== 'customer');
   if (isStaff) {
     booking.processedBy = req.user._id;
     booking.processedByRole = req.user.role;
@@ -540,6 +655,11 @@ export const resolveRefundRequest = asyncHandler(async (req, res) => {
   if (status === 'refunded') {
     booking.refundStatus = 'refunded';
     booking.status = 'cancelled';
+
+    // FREE the session slot so others can book it (Self-syncing via countDocuments)
+    if (booking.sessionId) {
+      // Logic handled via live query in other endpoints
+    }
 
     // Sync Invoice Status: Mark invoice as cancelled upon refund
     const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
@@ -612,11 +732,9 @@ export const deleteBooking = asyncHandler(async (req, res) => {
     throw new Error('Not allowed');
   }
 
-  // Revert capacity if not already cancelled
+  // Revert capacity if not already cancelled (Self-syncing via countDocuments)
   if (booking.status !== 'cancelled' && booking.sessionId) {
-    await Session.findByIdAndUpdate(booking.sessionId, {
-      $inc: { bookedParticipants: -booking.participants.length }
-    });
+    // Logic handled via live query
   }
 
   await booking.deleteOne();
@@ -694,7 +812,7 @@ export const linkUserBookings = async (user) => {
  * Consolidated into a single SalesOrder and Payment.
  */
 export const createGroupBooking = asyncHandler(async (req, res) => {
-  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName: providedCorporateName, paymentMethod, promotionId, discountAmount } = req.body;
+  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName: providedCorporateName, paymentMethod, promotionId, discountAmount, couponCode, couponAmount } = req.body;
 
   const resolvedSessionIds = sessionIds || sessions;
 
@@ -740,17 +858,61 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     throw new Error('Class not found');
   }
 
+  let singleTaxAmount = 0;
+  let activeTax = null;
+
+  if (classItem.taxId) {
+    activeTax = await Tax.findById(classItem.taxId);
+  } else if (locationId) {
+    // Fallback to location-default active tax
+    activeTax = await Tax.findOne({ 
+      locationId, 
+      status: 'active',
+      $or: [
+        { validityEnd: { $exists: false } },
+        { validityEnd: { $gte: new Date() } }
+      ]
+    });
+  }
+
+  // Tax will be calculated per participant inside the distribution logic below
+  // to account for post-discount/pro-rata price accurately.
+
+  const distCoupon = (couponAmount || 0) / (resolvedSessionIds.length * participants.length);
+  const distDisc = (discountAmount || 0) / (resolvedSessionIds.length * participants.length);
+  const singleNetPrice = Math.max(0, classItem.price - distDisc - distCoupon);
+  
+  if (activeTax) {
+    singleTaxAmount = calculateTax(singleNetPrice, activeTax);
+  }
+
+  // Final price for a single participant for one session
+  const singleTotalAmount = activeTax?.calculationMethod === 'inclusive'
+    ? singleNetPrice
+    : singleNetPrice + singleTaxAmount;
+
   // 3. Process each session for each participant
-  for (const sessionId of sessionIds) {
+  for (const sessionId of resolvedSessionIds) {
     const session = await Session.findById(sessionId);
     if (!session) {
       res.status(404);
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Check capacity for this session
-    const remaining = session.capacity - (session.bookedParticipants || 0);
-    if (participants.length > remaining) {
+    // Check capacity for this session (Bypass for admins/staff)
+    const userRole = (req.user.role || '').toLowerCase().replace(/[\s_-]/g, '');
+    const isAdmin = ['admin', 'superadmin'].some(r => userRole === r) ||
+      ['admin', 'manager', 'cashier'].some(r => userRole.includes(r));
+    
+    // LIVE COUNT Check: Don't trust the session.bookedParticipants field
+    const liveBookedCount = await mongoose.model('Booking').countDocuments({
+      sessionId: session._id,
+      status: { $ne: 'cancelled' }
+    });
+    
+    const remaining = session.capacity - liveBookedCount;
+    
+    if (participants.length > remaining && !isAdmin) {
       res.status(400);
       const msg = remaining <= 0 
         ? `Session on ${new Date(session.startTime).toLocaleString()} is full` 
@@ -759,32 +921,44 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     }
 
     for (const p of participants) {
+      const isStaff = !['parent', 'customer'].includes(userRole) || (req.user.permissions && req.user.permissions.length > 0);
+      const isCash = paymentMethod === 'center_cash';
+
       const b = await Booking.create({
-        userId: req.user._id,
+        userId: req.body.userId || req.user._id,
         classId,
         sessionId,
         locationId,
-        participantName: p.name,
-        participantAge: p.age,
-        participantGender: p.gender,
-        relation: p.relation,
-        childId: p.childId,
+        participants: [{
+          name: p.name,
+          age: p.age,
+          gender: p.gender,
+          relation: p.relation,
+          childId: p.childId
+        }],
         date: session.startTime,
-        totalAmount: classItem.price,
-        paymentStatus: paymentMethod === 'online' ? 'completed' : 'pending',
+        totalAmount: singleTotalAmount,
+        taxAmount: singleTaxAmount,
+        taxId: activeTax?._id || classItem.taxId,
+        paymentStatus: (paymentMethod === 'online' || (isStaff && isCash)) ? 'completed' : 'pending',
         paymentMethod: paymentMethod || 'center',
+        status: (paymentMethod === 'online' || (isStaff && isCash)) ? 'confirmed' : 'pending',
+        paymentDate: (isStaff && isCash) ? new Date() : undefined,
+        processedBy: isStaff ? req.user._id : undefined,
+        processedByRole: isStaff ? req.user.role : undefined,
         groupId: groupBookingId,
         isCorporate: isCorporateAdmin || isCorporateClient,
         corporateName,
         promotionId,
-        discountAmount: (discountAmount || 0) / (resolvedSessionIds.length * participants.length) // Distributed discount
+        discountAmount: (discountAmount || 0) / (resolvedSessionIds.length * participants.length), // Distributed discount
+        couponCode,
+        couponAmount: (couponAmount || 0) / (resolvedSessionIds.length * participants.length) // Distributed coupon
       });
       bookings.push(b);
-      totalAmount += classItem.price;
+      totalAmount += (classItem.price + singleTaxAmount);
 
-      // Update session capacity
-      session.bookedParticipants = (session.bookedParticipants || 0) + 1;
-      await session.save();
+      // Update session capacity (Self-syncing via countDocuments)
+      // Removed manual increment
 
       // INVOICE GENERATION for each booking in the group
       const invoiceNumber = await getNextInvoiceNumber();
@@ -794,7 +968,8 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
           description: `${classItem.title} - Group Booking (${p.name})`,
           quantity: 1,
           unitPrice: classItem.price,
-          total: classItem.price
+          taxAmount: singleTaxAmount,
+          total: classItem.price + singleTaxAmount
         }
       ];
 
@@ -807,50 +982,103 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
         });
       }
 
+      const distCoupon = (couponAmount || 0) / (resolvedSessionIds.length * participants.length);
+      const distDisc = (discountAmount || 0) / (resolvedSessionIds.length * participants.length);
       const invoiceData = {
         invoiceNumber,
         bookingId: b._id,
-        userId: req.user._id,
-        amount: classItem.price,
-        status: paymentMethod === 'online' ? 'paid' : 'unpaid',
+        userId: b.userId,
+        amount: singleTotalAmount,
+        status: (paymentMethod === 'online' || (isStaff && isCash)) ? 'paid' : 'unpaid',
         locationId,
-        items: invoiceItems
+        taxAmount: singleTaxAmount,
+        items: invoiceItems,
+        discountAmount: distDisc,
+        couponAmount: distCoupon,
+        couponCode
       };
 
-      if (discountAmount) {
-         const distDisc = (discountAmount || 0) / (resolvedSessionIds.length * participants.length);
-         invoiceData.amount -= distDisc;
+      if (distDisc > 0) {
          invoiceData.items.push({
-            description: 'Promotion Discount (Prop-rata)',
+            description: 'Promotion Discount (Pro-rata)',
             quantity: 1,
             unitPrice: -distDisc,
             total: -distDisc
          });
       }
 
+      if (distCoupon > 0) {
+        invoiceData.items.push({
+           description: `Voucher Applied: ${couponCode} (Pro-rata)`,
+           quantity: 1,
+           unitPrice: -distCoupon,
+           total: -distCoupon
+        });
+      }
+
       await Invoice.create(invoiceData);
     }
   }
 
-  // 4. Create Consolidated SalesOrder
-  const salesOrder = await SalesOrder.create({
-    userId: req.user._id,
-    bookings: bookings.map(b => b._id),
-    totalAmount,
-    totalAmount: (totalAmount - (discountAmount || 0)),
-    status: paymentMethod === 'online' ? 'completed' : 'pending',
-    paymentMethod: paymentMethod || 'center',
-    groupId: groupBookingId,
-    corporateName,
-    promotionId,
-    discountAmount: discountAmount || 0
-  });
+  // 4. Create Consolidated SalesOrder (one per booking to match schema)
+  for (const b of bookings) {
+    try {
+      await SalesOrder.create({
+        bookingId: b._id,
+        userId: req.body.userId || req.user._id,
+        amount: b.totalAmount,
+        status: paymentMethod === 'online' ? 'paid' : 'pending',
+        locationId
+      });
+    } catch (soErr) {
+      console.error('[SalesOrder] Failed to create for booking', b._id, soErr.message);
+    }
+  }
+
+  // COUPON GENERATION LOGIC (Cash Deposit Promo) - Group Level
+  if (promotionId) {
+    const promo = await Promotion.findById(promotionId);
+    if (promo && promo.promoType === 'cash_deposit') {
+      const couponValue = (promo.discountType === 'percentage') 
+        ? (totalAmount * (promo.discountValue / 100))
+        : Math.min(totalAmount, promo.discountValue * participants.length * resolvedSessionIds.length);
+      
+      if (couponValue > 0) {
+        const generatedCode = `CPN-G-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 90);
+
+        await Coupon.create({
+          code: generatedCode,
+          userId: req.user._id,
+          amount: Math.round(couponValue * 100) / 100,
+          expiryDate,
+          sourceBookingId: bookings[0]._id, // Reference first booking in group
+          status: 'active'
+        });
+      }
+    }
+  }
+
+  // COUPON REDEMPTION Logic
+  if (req.body.couponCode) {
+    const redeemedCoupon = await Coupon.findOne({ code: req.body.couponCode.toUpperCase(), status: 'active' });
+    if (redeemedCoupon) {
+      redeemedCoupon.status = 'redeemed';
+      redeemedCoupon.redeemBookingId = bookings[0]._id;
+      redeemedCoupon.redeemedAt = new Date();
+      // Assign user if it was an anonymous voucher
+      if (!redeemedCoupon.userId) {
+        redeemedCoupon.userId = req.body.userId || req.user._id;
+      }
+      await redeemedCoupon.save();
+    }
+  }
 
   // 5. Create Consolidated Payment
   await Payment.create({
-    userId: req.user._id,
-    orderId: salesOrder._id,
-    amount: (totalAmount - (discountAmount || 0)),
+    userId: req.body.userId || req.user._id,
+    amount: Math.round((totalAmount - (discountAmount || 0) - (req.body.couponAmount || 0)) * 100) / 100,
     discountAmount: discountAmount || 0,
     promotionId,
     paymentMethod: paymentMethod || 'center',
@@ -865,7 +1093,6 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     groupId: groupBookingId,
     bookingCount: bookings.length,
     totalAmount,
-    salesOrderId: salesOrder._id,
     bookings: bookings.map(b => ({ _id: b._id, bookingNumber: b.bookingNumber }))
   });
 });

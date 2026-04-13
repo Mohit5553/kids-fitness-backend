@@ -136,8 +136,14 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       break;
 
     case 'trainers':
-      data = await Trainer.find(filter)
-        .populate('locationId', 'name')
+      // Trainers have locationIds (array)
+      const trainerFilter = { ...filter };
+      if (trainerFilter.locationId) {
+        trainerFilter.locationIds = trainerFilter.locationId;
+        delete trainerFilter.locationId;
+      }
+      data = await Trainer.find(trainerFilter)
+        .populate('locationIds', 'name')
         .sort({ createdAt: -1 })
         .lean();
       break;
@@ -160,10 +166,9 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       }
       data = await Booking.find({ ...filter, ...bookingDateFilter })
         .populate('userId', 'name email phone')
-        .populate('classId', 'title capacity')
+        .populate('classId', 'title capacity price')
         .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
         .populate('locationId', 'name')
-        .populate('promotionId', 'name')
         .populate('processedBy', 'name')
         .sort({ date: -1 })
         .lean();
@@ -230,6 +235,14 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       }));
       break;
 
+    case 'attendance':
+      const attendanceDateFilter = {};
+      if (sDate && eDate) {
+        attendanceDateFilter.checkedInAt = {
+          $gte: sDate,
+          $lte: eDate
+        };
+      }
       data = await Attendance.find({ ...filter, ...attendanceDateFilter })
         .populate('bookingId', 'bookingNumber')
         .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
@@ -260,6 +273,32 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         discount: p.discountAmount || 0,
         finalAmount: p.amount,
         date: p.createdAt
+      }));
+      break;
+
+    case 'taxes':
+      // Fetch bookings with tax details
+      const taxBookings = await Booking.find({ ...filter, ...dateFilter, taxAmount: { $gt: 0 } })
+        .populate('userId', 'name email')
+        .populate('classId', 'title')
+        .populate('locationId', 'name')
+        .populate('processedBy', 'name')
+        .populate('taxId', 'name type value')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      data = taxBookings.map(b => ({
+        ...b,
+        customerName: b.userId?.name || 'Guest',
+        itemName: b.classId?.title || 'Unknown Item',
+        branchName: b.locationId?.name || 'N/A',
+        cashierName: b.processedBy?.name || 'System',
+        taxName: b.taxId?.name || 'VAT',
+        taxRate: b.taxId ? `${b.taxId.value}${b.taxId.type === 'percentage' ? '%' : ' AED'}` : 'N/A',
+        baseAmount: (b.totalAmount || 0) - (b.taxAmount || 0),
+        taxCollected: b.taxAmount || 0,
+        totalPaid: b.totalAmount || 0,
+        date: b.createdAt
       }));
       break;
 

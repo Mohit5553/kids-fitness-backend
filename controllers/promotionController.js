@@ -157,6 +157,16 @@ export const calculateDiscount = (promotion, orderDetails) => {
         discountAmount = Math.min(amount, promotion.discountValue);
       }
       break;
+    case 'cash_deposit':
+      // Pay full now, get coupon later. 
+      // We return the potential discount value for the coupon generation logic,
+      // but the booking controller will handle not subtracting it from the totalAmount.
+      if (promotion.discountType === 'percentage') {
+        discountAmount = (amount * (promotion.discountValue / 100));
+      } else {
+        discountAmount = Math.min(amount, promotion.discountValue);
+      }
+      break;
   }
 
   return Math.round(discountAmount * 100) / 100;
