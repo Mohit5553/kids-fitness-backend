@@ -6,12 +6,12 @@ import Coupon from '../models/Coupon.js';
 // @access  Private
 export const getMyCoupons = asyncHandler(async (req, res) => {
   const now = new Date();
-  const coupons = await Coupon.find({ 
+  const coupons = await Coupon.find({
     userId: req.user._id,
     status: 'active',
     expiryDate: { $gt: now }
   }).sort({ createdAt: -1 });
-  
+
   res.json(coupons);
 });
 
@@ -35,7 +35,7 @@ export const validateCoupon = asyncHandler(async (req, res) => {
     throw new Error('Coupon code is required');
   }
 
-  const coupon = await Coupon.findOne({ 
+  const coupon = await Coupon.findOne({
     code: code.toUpperCase(),
     status: 'active'
   });
@@ -55,12 +55,12 @@ export const validateCoupon = asyncHandler(async (req, res) => {
 
   // Ownership check
   if (coupon.userId && coupon.userId.toString() !== req.user._id.toString()) {
-     // If staff is processing, it's allowed.
-     const isStaff = req.user.role !== 'parent' && req.user.role !== 'customer';
-     if (!isStaff) {
-        res.status(403);
-        throw new Error('This coupon belongs to another user');
-     }
+    // If staff is processing, it's allowed.
+    const isStaff = req.user.role !== 'parent' && req.user.role !== 'customer';
+    if (!isStaff) {
+      res.status(403);
+      throw new Error('This coupon belongs to another user');
+    }
   }
 
   res.json({
@@ -81,6 +81,8 @@ export const createCoupon = asyncHandler(async (req, res) => {
 
   if (count > 1) {
     // Batch generation
+    const batchId = `BATCH-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const bName = description || `Batch of ${count} Vouchers`;
     const coupons = [];
     for (let i = 0; i < count; i++) {
       const generatedCode = code ? `${code}-${i + 1}` : `GIFT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
@@ -90,7 +92,9 @@ export const createCoupon = asyncHandler(async (req, res) => {
         expiryDate,
         userId: userId || undefined,
         type: type || 'gift',
-        description
+        description,
+        batchId,
+        batchName: bName
       });
     }
     const created = await Coupon.insertMany(coupons);
@@ -121,6 +125,20 @@ export const createCoupon = asyncHandler(async (req, res) => {
   });
 
   res.status(201).json(coupon);
+});
+
+// @desc    Delete/Revoke a batch of coupons (Admin)
+// @route   DELETE /api/coupons/batch/:batchId
+// @access  Private/Admin
+export const deleteCouponBatch = asyncHandler(async (req, res) => {
+  const { batchId } = req.params;
+  if (!batchId) {
+    res.status(400);
+    throw new Error('Batch ID is required');
+  }
+
+  const result = await Coupon.deleteMany({ batchId });
+  res.json({ message: `${result.deletedCount} vouchers revoked from batch` });
 });
 
 // @desc    Delete/Revoke a coupon (Admin)

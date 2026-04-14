@@ -77,31 +77,60 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     filtered = filtered.filter(b => b.groupId === groupId);
   }
 
-  // If sessionId is provided AND it belongs to a membership, we add that member to the participant list
+  // If sessionId is provided, we also add all memberships that share this session to the roster
   if (sessionId) {
       const targetSession = await Session.findById(sessionId);
-      if (targetSession && targetSession.membershipId) {
-          const membership = await Membership.findById(targetSession.membershipId).populate('userId', 'name email').populate('childId');
-          if (membership) {
-              const virtualBooking = {
-                  _id: `MR-${membership._id}`,
-                  bookingNumber: `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
-                  bookingType: 'package',
-                  userId: membership.userId,
-                  participants: membership.childId ? [{
-                      name: membership.childId.name,
-                      age: membership.childId.age,
-                      gender: membership.childId.gender,
-                      relation: 'Child',
-                      childId: membership.childId._id
-                  }] : [],
-                  status: 'confirmed',
-                  paymentStatus: 'completed',
-                  createdAt: membership.createdAt,
-                  isVirtualMembership: true
-              };
-              filtered.unshift(virtualBooking);
-          }
+      if (targetSession) {
+          // Find all memberships that contain this sessionId in their generated schedule
+          const relevantMemberships = await Membership.find({ 
+              generatedSessions: sessionId,
+              status: 'active'
+          })
+          .populate('userId', 'name email phone')
+          .populate('childId')
+          .populate('planId', 'name');
+
+          // Pre-fetch all attendance for this session to mark virtual bookings as attended
+          const attendances = await Attendance.find({ sessionId });
+          const attendedMemberIds = attendances.map(a => a.membershipId?.toString()).filter(Boolean);
+
+          relevantMemberships.forEach(membership => {
+              // Avoid duplicates if a membership somehow already has a real booking (rare)
+              const alreadyExists = filtered.some(b => 
+                (b.membershipId && b.membershipId.toString() === membership._id.toString()) ||
+                (b._id === `MR-${membership._id}-${sessionId}`)
+              );
+
+              if (!alreadyExists) {
+                  const isAttended = attendedMemberIds.includes(membership._id.toString());
+                  
+                  const virtualBooking = {
+                      _id: `MR-${membership._id}-${sessionId}`,
+                      bookingNumber: `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
+                      bookingType: 'package',
+                      userId: membership.userId,
+                      participants: membership.childId ? [{
+                          name: membership.childId.name,
+                          age: membership.childId.age,
+                          gender: membership.childId.gender,
+                          relation: 'Child',
+                          childId: membership.childId._id
+                      }] : [{
+                          name: membership.userId?.name || 'Account Holder',
+                          age: 18,
+                          relation: 'Self'
+                      }],
+                      status: isAttended ? 'attended' : 'confirmed',
+                      paymentStatus: 'completed',
+                      createdAt: membership.createdAt,
+                      locationId: membership.locationId,
+                      membershipId: membership._id,
+                      planId: membership.planId,
+                      isVirtualMembership: true
+                  };
+                  filtered.unshift(virtualBooking);
+              }
+          });
       }
   }
 
@@ -445,18 +474,85 @@ export const createBooking = asyncHandler(async (req, res) => {
 
 
 export const updateBookingStatus = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
-  if (!booking) {
-    res.status(404);
-    throw new Error('Booking not found');
+  const { id } = req.params;
+  const { status, paymentMethod, reference } = req.body;
+
+  // 1. Handle Virtual Membership Attendance (MR-prefix)
+  if (id.startsWith('MR-')) {
+    const parts = id.split('-');
+    // Expected format: MR-membershipId-sessionId
+    if (parts.length < 3) {
+      res.status(400);
+      throw new Error('Invalid virtual booking ID format');
+    }
+    const membershipId = parts[1];
+    const sessionId = parts[2];
+
+    if (!mongoose.Types.ObjectId.isValid(membershipId) || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      res.status(400);
+      throw new Error('Invalid IDs in virtual booking');
+    }
+
+    if (status !== 'attended') {
+      res.status(400);
+      throw new Error('Only attendance can be updated for membership rosters currently');
+    }
+
+    const membership = await Membership.findById(membershipId).populate('userId childId');
+    if (!membership) {
+      res.status(404);
+      throw new Error('Membership not found');
+    }
+
+    // Create/Update Attendance Record
+    const filter = {
+      sessionId,
+      membershipId: membership._id
+    };
+
+    if (membership.childId) {
+      filter.childId = membership.childId._id;
+    } else {
+      filter.userId = membership.userId?._id;
+    }
+
+    // Check if attendance already exists to prevent double-deduction from classesRemaining
+    const existingAttendance = await Attendance.findOne(filter);
+    
+    if (!existingAttendance && status === 'attended') {
+      if (membership.classesRemaining > 0) {
+        membership.classesRemaining -= 1;
+        await membership.save();
+      }
+    }
+
+    await Attendance.findOneAndUpdate(
+      filter,
+      {
+        ...filter,
+        participantName: membership.childId?.name || membership.userId?.name,
+        locationId: membership.locationId,
+        status: 'present',
+        method: 'manual',
+        checkedInAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    return res.json({ 
+      message: 'Membership attendance recorded successfully',
+      classesRemaining: membership.classesRemaining 
+    });
   }
+
+  // 2. Standard Booking Logic
+  const booking = await Booking.findById(id);
   if (req.user?.role === 'admin' && req.user.locationId && booking.locationId?.toString() !== req.user.locationId.toString()) {
     res.status(403);
     throw new Error('Not allowed');
   }
 
   const oldStatus = booking.status;
-  const { status, paymentMethod, reference } = req.body;
   
   // Sequential Workflow Validation
   if (status === 'attended' && booking.status !== 'confirmed') {

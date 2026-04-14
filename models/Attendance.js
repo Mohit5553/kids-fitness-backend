@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 const attendanceSchema = new mongoose.Schema(
   {
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
+    membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', required: true },
     childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' }, // Optional for guests
     participantName: { type: String }, // For guests or non-profile bookings
