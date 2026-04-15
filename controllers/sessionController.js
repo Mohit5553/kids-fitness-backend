@@ -34,7 +34,9 @@ export const getSessions = asyncHandler(async (req, res) => {
   // Only show them if includeMemberships=true is passed (used in admin management pages)
   const isStaff = req.user && req.user.role !== 'parent';
 
-  if (!(includeMemberships === 'true' && isStaff)) {
+  // Automatic visibility: If it's a staff member/trainer, include membership slots by default
+  // if searching specifically for their schedule or if explicitly requested.
+  if (!isStaff || (includeMemberships !== 'true' && !isTrainerSpecificSearch)) {
     filter.membershipId = null; 
   }
 
@@ -51,7 +53,23 @@ export const getSessions = asyncHandler(async (req, res) => {
   if (classId) filter.classId = classId;
   
   if (trainerId) {
-    filter.trainerId = trainerId;
+    // New Logic: Show sessions explicitly assigned to this trainer 
+    // PLUS unassigned (Random) sessions at the trainer's authorized locations.
+    const TrainerModel = mongoose.model('Trainer');
+    const trainer = await TrainerModel.findById(trainerId);
+    if (trainer && trainer.locationIds && trainer.locationIds.length > 0) {
+      filter.$or = [
+        { trainerId: trainerId },
+        { 
+          trainerId: null, 
+          locationId: { $in: trainer.locationIds }, 
+          status: 'scheduled',
+          trainerStatus: { $ne: 'rejected' } // Don't show previously rejected unassigned slots
+        }
+      ];
+    } else {
+      filter.trainerId = trainerId;
+    }
   } else if (trainerEmail) {
     // Robust fallback: verify the trainer's session list by their unique email ID
     const userMatched = await mongoose.model('User').findOne({ email: trainerEmail });
@@ -70,27 +88,45 @@ export const getSessions = asyncHandler(async (req, res) => {
   }
 
   const sessions = await Session.find(filter)
-    .populate('classId', 'title ageGroup duration price minAge maxAge')
+    .populate({ path: 'classId', select: 'title name ageGroup duration price minAge maxAge' })
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
-    .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } })
-    .sort({ startTime: 1 }); // Sort by soonest first to ensure tomorrow/today appear at the top
+    .sort({ startTime: 1 });
 
   // Add bookingsCount to each session
   const sessionsWithCounts = await Promise.all(
     sessions.map(async (session) => {
-      // If the session is directly linked to a membership, it counts as 1 registration
-      let totalBookings = await Booking.countDocuments({
+      // Corrected Occupancy Calculation for Shared Sessions
+      // 1. Resolve ALL Unique Plan names for this session (Shared Membership Packages)
+      const MembershipModel = mongoose.model('Membership');
+      const memberships = await MembershipModel.find({
+        generatedSessions: session._id,
+        status: 'active'
+      }).populate('planId', 'name');
+      
+      const uniquePlanNames = [...new Set(memberships.map(m => m.planId?.name).filter(Boolean))];
+
+      // 2. Count regular walk-in bookings
+      const walkinBookings = await Booking.countDocuments({
         sessionId: session._id,
         status: { $ne: 'cancelled' }
       });
 
-      if (session.membershipId) {
-          totalBookings += 1;
-      }
+      const totalParticipants = memberships.length + walkinBookings;
 
       const sessionObj = session.toObject();
-      sessionObj.bookedParticipants = totalBookings;
+      sessionObj.bookedParticipants = totalParticipants;
+
+      if (uniquePlanNames.length > 0) {
+          // Use the joined package names as the title for membership sessions
+          if (!sessionObj.classId || sessionObj.classType === 'Plan') {
+              sessionObj.classId = {
+                  ...sessionObj.classId,
+                  title: uniquePlanNames.join(", "),
+                  packageNames: uniquePlanNames
+              };
+          }
+      }
 
       // Robust fallback: if trainer is TBA but session is from a membership with a fixed trainer
       if (!sessionObj.trainerId && session.membershipId) {
@@ -369,20 +405,30 @@ export const updateTrainerStatus = asyncHandler(async (req, res) => {
     throw new Error('Session not found');
   }
 
-  // Permission Check: Admin or the Trainer assigned to the session
   const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
   let isAssignedTrainer = false;
+  let isClaimable = false;
 
   const TrainerModel = mongoose.model('Trainer');
   const trainer = await TrainerModel.findOne({ userId: req.user._id });
   
-  if (trainer && session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
-    isAssignedTrainer = true;
+  if (trainer) {
+    if (session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
+      isAssignedTrainer = true;
+    } else if (!session.trainerId && trainer.locationIds.some(id => id.toString() === (session.locationId?._id || session.locationId).toString())) {
+      // It's unassigned (Random) and trainer is at the same location
+      isClaimable = true;
+    }
   }
 
-  if (!isAdmin && !isAssignedTrainer) {
+  if (!isAdmin && !isAssignedTrainer && !isClaimable) {
     res.status(403);
     throw new Error('Not authorized to update trainer status for this session');
+  }
+
+  // If claiming an unassigned session
+  if (isClaimable && trainerStatus === 'accepted') {
+    session.trainerId = trainer._id;
   }
 
   session.trainerStatus = trainerStatus;

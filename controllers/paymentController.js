@@ -157,7 +157,7 @@ export const createPayment = asyncHandler(async (req, res) => {
     membershipId,
     amount,
     paymentMethod,
-    status: 'paid',
+    status: req.body.status || (paymentMethod === 'center' ? 'pending' : 'paid'),
     reference,
     last4,
     locationId,

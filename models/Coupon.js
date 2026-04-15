@@ -2,15 +2,15 @@ import mongoose from 'mongoose';
 
 const couponSchema = new mongoose.Schema(
   {
-    code: { 
-      type: String, 
-      required: true, 
-      unique: true, 
+    code: {
+      type: String,
+      required: true,
+      unique: true,
       uppercase: true,
-      trim: true 
+      trim: true
     },
-    userId: { 
-      type: mongoose.Schema.Types.ObjectId, 
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
     },
     type: {
@@ -21,36 +21,43 @@ const couponSchema = new mongoose.Schema(
     description: {
       type: String
     },
-    amount: { 
-      type: Number, 
-      required: true 
+    amount: {
+      type: Number,
+      required: true
     },
-    expiryDate: { 
-      type: Date, 
-      required: true 
+    expiryDate: {
+      type: Date,
+      required: true
     },
-    status: { 
-      type: String, 
-      enum: ['active', 'redeemed', 'expired'], 
-      default: 'active' 
+    status: {
+      type: String,
+      enum: ['active', 'redeemed', 'expired'],
+      default: 'active'
     },
-    sourceBookingId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Booking' 
+    sourceBookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Booking'
     },
-    redeemBookingId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Booking' 
+    redeemBookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Booking'
     },
-    redeemedAt: { 
-      type: Date 
+    redeemedAt: {
+      type: Date
+    },
+    batchId: {
+      type: String,
+      index: true
+    },
+    batchName: {
+      type: String
     }
   },
   { timestamps: true }
 );
 
 // Middleware to check expiry on find
-couponSchema.pre('find', function() {
+couponSchema.pre('find', function () {
   const now = new Date();
   // This is a soft check, doesn't update the DB but could be used in controller
 });

@@ -67,24 +67,46 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
         if (sessionDate < new Date()) {
            // Skip if already passed today
         } else {
-            const sessionData = {
-                classId: plan._id, // Using planId as classId for membership sessions if no specific class assigned
+            // DE-DUPLICATION LOGIC: Find existing session for this plan/time/location
+            let targetSessionId;
+            const existingSession = await Session.findOne({
+                classId: plan._id,
+                classType: 'Plan',
                 startTime: sessionDate,
-                endTime: new Date(sessionDate.getTime() + 60 * 60 * 1000), // Default 1 hour
-                membershipId: membership._id,
                 locationId: locationId,
-                status: 'scheduled',
-                attendanceStatus: 'booked'
-            };
+                status: 'scheduled'
+            }).session(dbSession);
 
-            // Assign fixed trainer if specified in the plan
-            if (plan.trainerAllocation === 'fixed' && plan.trainerId) {
-                sessionData.trainerId = plan.trainerId;
-                sessionData.trainerStatus = 'accepted'; // Auto-accept since it's a fixed assignment
+            if (existingSession) {
+                targetSessionId = existingSession._id;
+            } else {
+                // Create new shared session (no membershipId assigned directly to Session)
+                const sessionData = {
+                    classId: plan._id,
+                    startTime: sessionDate,
+                    endTime: new Date(sessionDate.getTime() + 60 * 60 * 1000), // Default 1 hour
+                    locationId: locationId,
+                    status: 'scheduled'
+                };
+
+                // Assign fixed trainer if specified in the plan
+                if (plan.trainerAllocation === 'fixed' && plan.trainerId) {
+                    sessionData.trainerId = plan.trainerId;
+                    sessionData.trainerStatus = 'accepted'; 
+                }
+
+                const newSessions = await Session.create([sessionData], { session: dbSession });
+                targetSessionId = newSessions[0]._id;
+
+                // Sync trainer to class availableTrainers
+                if (sessionData.trainerId) {
+                    await Session.model('Class').findByIdAndUpdate(plan._id, {
+                        $addToSet: { availableTrainers: sessionData.trainerId }
+                    });
+                }
             }
 
-            const session = await Session.create([sessionData], { session: dbSession });
-            sessions.push(session[0]._id);
+            sessions.push(targetSessionId);
             sessionsCreated++;
         }
       }

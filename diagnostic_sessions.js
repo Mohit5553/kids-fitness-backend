@@ -1,27 +1,45 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import Session from './models/Session.js';
+import path from 'path';
 
-dotenv.config();
+// Load env from backend
+dotenv.config({ path: 'd:/jts/kids fitness/kids-fitness-backend/.env' });
 
-const run = async () => {
+const SessionSchema = new mongoose.Schema({}, { strict: false });
+const Session = mongoose.model('Session', SessionSchema, 'sessions');
+
+async function diagnostic() {
     try {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('Connected to MongoDB');
 
-        const now = new Date();
-        const startOfDay = new Date(now.setHours(0,0,0,0));
-        const endOfDay = new Date(now.setHours(23,59,59,999));
+        const duplicates = await Session.aggregate([
+            {
+                $match: { status: 'scheduled' }
+            },
+            {
+                $group: {
+                    _id: {
+                        classId: '$classId',
+                        startTime: '$startTime',
+                        locationId: '$locationId'
+                    },
+                    count: { $sum: 1 },
+                    ids: { $push: '$_id' },
+                    membershipIds: { $push: '$membershipId' }
+                }
+            },
+            {
+                $match: { count: { $gt: 1 } }
+            }
+        ]);
 
-        console.log(`Checking sessions between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
-
-        const sessions = await Session.find({
-            startTime: { $gte: startOfDay, $lte: endOfDay }
-        }).populate('classId', 'title');
-
-        console.log(`Found ${sessions.length} sessions for today:`);
-        sessions.forEach(s => {
-            console.log(`- ${s.classId?.title} at ${s.startTime.toISOString()} (End: ${s.endTime?.toISOString()})`);
+        console.log('Found duplicate groups:', duplicates.length);
+        duplicates.forEach(d => {
+            console.log(`\nDuplicate found for Group:`, d._id);
+            console.log(`Count: ${d.count}`);
+            console.log(`IDs: ${d.ids.join(', ')}`);
+            console.log(`Membership IDs present:`, d.membershipIds.filter(id => id));
         });
 
         process.exit(0);
@@ -29,6 +47,6 @@ const run = async () => {
         console.error(err);
         process.exit(1);
     }
-};
+}
 
-run();
+diagnostic();

@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 
 const sessionSchema = new mongoose.Schema(
   {
-    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
+    classId: { type: mongoose.Schema.Types.ObjectId, refPath: 'classType', required: true },
+    classType: { type: String, enum: ['Class', 'Plan'], default: 'Class' },
     trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
     startTime: { type: Date, required: true },
     endTime: { type: Date },

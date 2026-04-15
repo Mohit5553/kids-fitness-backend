@@ -5,7 +5,8 @@ import {
   getAllCoupons,
   validateCoupon,
   createCoupon,
-  deleteCoupon
+  deleteCoupon,
+  deleteCouponBatch
 } from '../controllers/couponController.js';
 
 const router = express.Router();
@@ -18,6 +19,7 @@ router.post('/validate', validateCoupon);
 // Admin routes
 router.get('/', adminOnly, getAllCoupons);
 router.post('/', adminOnly, createCoupon);
+router.delete('/batch/:batchId', adminOnly, deleteCouponBatch);
 router.delete('/:id', adminOnly, deleteCoupon);
 
 export default router;

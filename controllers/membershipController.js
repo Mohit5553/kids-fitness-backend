@@ -11,7 +11,11 @@ import Child from '../models/Child.js';
 import Promotion from '../models/Promotion.js';
 import Invoice from '../models/Invoice.js';
 import Payment from '../models/Payment.js';
+import Tax from '../models/Tax.js';
+import Coupon from '../models/Coupon.js';
+import { calculateTax } from '../utils/taxCalculator.js';
 import { getNextInvoiceNumber, getNextBookingNumber } from '../utils/sequenceGenerator.js';
+import Attendance from '../models/Attendance.js';
 
 const addWeeks = (date, weeks) => new Date(date.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
 const addMonths = (date, months) => {
@@ -44,7 +48,6 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
         populate: { path: 'trainerId', select: 'name' }
       })
       .sort({ createdAt: -1 });
-
     const isMohit = req.user.name?.toLowerCase().includes('mohit');
 
     for (let m of memberships) {
@@ -187,7 +190,37 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
         .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } })
         .sort({ createdAt: -1 });
 
-    res.json(healedMemberships);
+    // FETCH ATTENDANCE DATA TO ENRICH SESSIONS
+    const mIds = healedMemberships.map(m => m._id);
+    const atts = await Attendance.find({ 
+        membershipId: { $in: mIds } 
+    }).lean();
+
+    // Transform memberships to include attendanceStatus in each generatedSession
+    const finalMemberships = healedMemberships.map(m => {
+        const mObj = m.toObject();
+        if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
+            mObj.generatedSessions = mObj.generatedSessions.map(session => {
+                const att = atts.find(a => 
+                    a.membershipId?.toString() === m._id.toString() && 
+                    a.sessionId?.toString() === session._id.toString()
+                );
+                
+                let attendanceStatus = 'pending'; // Default
+                if (att) {
+                  attendanceStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
+                }
+
+                return {
+                    ...session,
+                    attendanceStatus
+                };
+            });
+        }
+        return mObj;
+    });
+
+    res.json(finalMemberships);
   } catch (error) {
     console.error('[getMyMemberships] Fatal error:', error.message);
     res.status(500).json({ message: 'Error retrieving memberships', error: error.message });
@@ -205,7 +238,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
 });
 
 export const createMembership = asyncHandler(async (req, res) => {
-  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId, couponCode, couponAmount, membershipUnits: reqUnits } = req.body;
+  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId, couponCode, couponAmount, membershipUnits: reqUnits, startDate: reqStartDate } = req.body;
   if (!planId) {
     res.status(400);
     throw new Error('planId is required');
@@ -222,7 +255,12 @@ export const createMembership = asyncHandler(async (req, res) => {
   const planCapacity = plan.classesIncluded || 1;
   const membershipUnits = reqUnits || Math.max(1, Math.ceil(totalWeeklySpots / planCapacity));
 
-  const startDate = new Date();
+  // Use provided startDate or default to now
+  const startDate = reqStartDate ? new Date(reqStartDate) : new Date();
+  
+  // Ensure we normalize to start of day for consistency if needed, 
+  // though Date(reqStartDate) from an input type="date" usually handles this.
+  
   let endDate;
 
   if (plan.type === 'subscription' && plan.billingCycle && plan.billingCycle !== 'none') {
@@ -391,8 +429,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       totalAmount,
       taxAmount,
       taxId: activeTax?._id,
-      status: 'confirmed',
-      paymentStatus: 'completed',
+      status: resolvedPaymentMethod === 'center' ? 'pending' : 'confirmed',
+      paymentStatus: resolvedPaymentMethod === 'center' ? 'pending' : 'completed',
       paymentMethod: resolvedPaymentMethod,
       paymentId: paymentId,
       locationId: plan.locationId,
@@ -452,9 +490,12 @@ export const createMembership = asyncHandler(async (req, res) => {
        userId: targetUserId,
        amount: totalAmount,
        taxAmount: taxAmount,
-       status: 'paid',
+       status: resolvedPaymentMethod === 'center' ? 'unpaid' : 'paid',
        items: invoiceItems,
-       locationId: plan.locationId
+       locationId: plan.locationId,
+       discountAmount: discountAmount || 0,
+       couponAmount: couponAmount || 0,
+       couponCode: couponCode
     }], { session });
     
     // COUPON GENERATION LOGIC (Cash Deposit Promo)
@@ -542,4 +583,29 @@ export const updateMembership = asyncHandler(async (req, res) => {
   }
 
   res.json(saved);
+});
+
+export const getMembershipByBookingId = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+
+  const membership = await Membership.findOne({ bookingId })
+    .populate('planId', 'name price validity type classesIncluded durationWeeks')
+    .populate({
+      path: 'generatedSessions',
+      populate: { path: 'trainerId', select: 'name' },
+      options: { sort: { startTime: 1 } }
+    });
+
+  if (!membership) {
+    res.status(404);
+    throw new Error('Membership not found for this booking');
+  }
+
+  // Check location access if admin
+  if (req.user?.role === 'admin' && req.user.locationId && membership.locationId?.toString() !== req.user.locationId.toString()) {
+    res.status(403);
+    throw new Error('Access denied to this membership');
+  }
+
+  res.json(membership);
 });
