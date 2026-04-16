@@ -22,11 +22,19 @@ export const getSessions = asyncHandler(async (req, res) => {
   const isTrainerSpecificSearch = trainerId || trainerEmail || trainerName;
 
   if (queryLocationId) {
-    filter.locationId = queryLocationId;
+    if (includeMemberships === 'true') {
+      filter.$or = [{ locationId: queryLocationId }, { locationId: null }, { locationId: { $exists: false } }];
+    } else {
+      filter.locationId = queryLocationId;
+    }
   } else if (!isTrainerSpecificSearch) {
     const locationIds = resolveReadLocationIds(req);
     if (locationIds && locationIds.length > 0) {
-      filter.locationId = { $in: locationIds };
+      if (includeMemberships === 'true') {
+        filter.$or = [{ locationId: { $in: locationIds } }, { locationId: null }, { locationId: { $exists: false } }];
+      } else {
+        filter.locationId = { $in: locationIds };
+      }
     }
   }
 
@@ -37,7 +45,8 @@ export const getSessions = asyncHandler(async (req, res) => {
   // Automatic visibility: If it's a staff member/trainer, include membership slots by default
   // if searching specifically for their schedule or if explicitly requested.
   if (!isStaff || (includeMemberships !== 'true' && !isTrainerSpecificSearch)) {
-    filter.membershipId = null; 
+    filter.membershipId = null;
+    filter.classType = 'Class'; // Force Physical Class only for public schedule
   }
 
   if (start || end) {
@@ -51,7 +60,7 @@ export const getSessions = asyncHandler(async (req, res) => {
   }
 
   if (classId) filter.classId = classId;
-  
+
   if (trainerId) {
     // New Logic: Show sessions explicitly assigned to this trainer 
     // PLUS unassigned (Random) sessions at the trainer's authorized locations.
@@ -60,11 +69,10 @@ export const getSessions = asyncHandler(async (req, res) => {
     if (trainer && trainer.locationIds && trainer.locationIds.length > 0) {
       filter.$or = [
         { trainerId: trainerId },
-        { 
-          trainerId: null, 
-          locationId: { $in: trainer.locationIds }, 
-          status: 'scheduled',
-          trainerStatus: { $ne: 'rejected' } // Don't show previously rejected unassigned slots
+        {
+          trainerId: null,
+          locationId: { $in: trainer.locationIds },
+          status: 'scheduled'
         }
       ];
     } else {
@@ -94,7 +102,7 @@ export const getSessions = asyncHandler(async (req, res) => {
     .sort({ startTime: 1 });
 
   // Add bookingsCount to each session
-  const sessionsWithCounts = await Promise.all(
+  const sessionsWithCounts = (await Promise.all(
     sessions.map(async (session) => {
       // Corrected Occupancy Calculation for Shared Sessions
       // 1. Resolve ALL Unique Plan names for this session (Shared Membership Packages)
@@ -103,48 +111,86 @@ export const getSessions = asyncHandler(async (req, res) => {
         generatedSessions: session._id,
         status: 'active'
       }).populate('planId', 'name');
-      
-      const uniquePlanNames = [...new Set(memberships.map(m => m.planId?.name).filter(Boolean))];
 
-      // 2. Count regular walk-in bookings
-      const walkinBookings = await Booking.countDocuments({
+      const normalBookings = await Booking.countDocuments({
         sessionId: session._id,
         status: { $ne: 'cancelled' }
       });
 
-      const totalParticipants = memberships.length + walkinBookings;
+      // STRICT FILTERING: 
+      // Physical Classes (classType: 'Class') should only count normal bookings.
+      // Membership Sessions (classType: 'Plan') should only count membership students.
+      let totalOccupancy = 0;
+      if (session.classType === 'Class') {
+        totalOccupancy = normalBookings;
+      } else {
+        totalOccupancy = memberships.length;
+      }
 
       const sessionObj = session.toObject();
-      sessionObj.bookedParticipants = totalParticipants;
+      sessionObj.bookedParticipants = totalOccupancy;
 
-      if (uniquePlanNames.length > 0) {
-          // Use the joined package names as the title for membership sessions
-          if (!sessionObj.classId || sessionObj.classType === 'Plan') {
-              sessionObj.classId = {
-                  ...sessionObj.classId,
-                  title: uniquePlanNames.join(", "),
-                  packageNames: uniquePlanNames
-              };
-          }
+      // Backward compatibility: old flows may have unassigned sessions stuck in "rejected".
+      // Keep these claimable until a trainer explicitly accepts.
+      if (!sessionObj.trainerId && sessionObj.trainerStatus === 'rejected') {
+        sessionObj.trainerStatus = 'pending';
+      }
+
+      // Ensure session has a visible title/name
+      const baseInfo = sessionObj.classId || {};
+      const actualTitle = baseInfo.title || baseInfo.name;
+
+      // STRICT FILTERING: If session has no valid name (e.g. class deleted), hide it
+      if (!actualTitle) {
+        return null;
+      }
+
+      sessionObj.classId = {
+        ...baseInfo,
+        title: actualTitle,
+        name: actualTitle
+      };
+
+      // SELF-HEALING: If session is missing locationId but memberships have it, restore it
+      if (!session.locationId && memberships.length > 0) {
+        const firstValidLocationId = memberships.find(m => m.locationId)?.locationId;
+        if (firstValidLocationId) {
+          session.locationId = firstValidLocationId;
+          sessionObj.locationId = firstValidLocationId;
+          await session.save().catch(err => console.error(`[SessionHealer] Failed to fix location for ${session._id}:`, err.message));
+        }
+      }
+
+      // SELF-HEALING: If it's a 'Class' but not marked 'isManual', fix it so it shows on the schedule
+      // This catches any older sessions that were created before the naming and manual flag logic was added.
+      if (session.classType === 'Class' && !session.isManual) {
+        session.isManual = true;
+        sessionObj.isManual = true;
+        await session.save().catch(err => console.error(`[SessionHealer] Failed to fix manual flag for ${session._id}:`, err.message));
       }
 
       // Robust fallback: if trainer is TBA but session is from a membership with a fixed trainer
-      if (!sessionObj.trainerId && session.membershipId) {
-          const Membership = mongoose.model('Membership');
-          const Plan = mongoose.model('Plan');
-          const m = await Membership.findById(session.membershipId);
+      if (!sessionObj.trainerId && (session.membershipId || memberships.length > 0)) {
+        const Membership = mongoose.model('Membership');
+        const Plan = mongoose.model('Plan');
+
+        // Try to find any associated membership that might have a fixed trainer plan
+        const mId = session.membershipId || (memberships.length > 0 ? memberships[0]._id : null);
+        if (mId) {
+          const m = await Membership.findById(mId);
           if (m) {
-              const p = await Plan.findById(m.planId).populate('trainerId', 'name');
-              if (p && p.trainerId && p.trainerAllocation === 'fixed') {
-                  sessionObj.trainerId = p.trainerId;
-                  sessionObj.trainerStatus = 'accepted';
-              }
+            const p = await Plan.findById(m.planId).populate('trainerId', 'name');
+            if (p && p.trainerId && p.trainerAllocation === 'fixed') {
+              sessionObj.trainerId = p.trainerId;
+              sessionObj.trainerStatus = 'accepted';
+            }
           }
+        }
       }
 
       return sessionObj;
     })
-);
+  )).filter(Boolean);
 
   res.json(sessionsWithCounts);
 });
@@ -160,7 +206,7 @@ export const getSessionById = asyncHandler(async (req, res) => {
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
     .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } });
-    
+
   if (!session) {
     res.status(404);
     throw new Error('Session not found');
@@ -216,7 +262,7 @@ const checkTrainerConflict = async (res, trainerId, startTime, endTime, sessionI
 // @access  Private/Admin
 export const createSession = asyncHandler(async (req, res) => {
   let { classId, trainerId, startTime, endTime, capacity, location, status } = req.body;
-  
+
   if (!classId || !startTime) {
     res.status(400);
     throw new Error('classId and startTime are required');
@@ -253,7 +299,8 @@ export const createSession = asyncHandler(async (req, res) => {
     capacity: capacity ?? classItem.capacity,
     location,
     status: status || 'scheduled',
-    locationId
+    locationId,
+    isManual: true
   });
 
   // Automatically add trainer to class's availableTrainers if they aren't there
@@ -325,7 +372,7 @@ export const deleteSession = asyncHandler(async (req, res) => {
   // Permission Check: Admin or the Trainer assigned to the session
   const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
   let isAssignedTrainer = false;
-  
+
   if (req.user.role === 'trainer') {
     const trainer = await mongoose.model('Trainer').findOne({ userId: req.user._id });
     if (trainer && session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
@@ -350,15 +397,32 @@ export const deleteSession = asyncHandler(async (req, res) => {
 
     // Sync status to related bookings
     const BookingModel = mongoose.model('Booking');
-    await BookingModel.updateMany(
-      { sessionId: session._id, status: { $in: ['confirmed', 'pending', 'attended'] } },
-      { 
-        $set: { 
-          status: 'cancelled', 
-          cancellationReason: `Session cancelled: ${session.cancellationReason}` 
-        } 
+    const MembershipModel = mongoose.model('Membership');
+    const ClassModel = mongoose.model('Class');
+
+    const affectedBookings = await BookingModel.find({
+      sessionId: session._id,
+      status: { $in: ['confirmed', 'pending', 'attended', 'no-show'] }
+    });
+
+    for (const booking of affectedBookings) {
+      const oldStatus = booking.status;
+      booking.status = 'trainer-cancelled';
+      booking.cancellationReason = `Session cancelled: ${session.cancellationReason}`;
+      await booking.save();
+
+      // RESTORATION LOGIC: If it was already marked 'attended' or 'no-show', deduction might have happened.
+      // We should restore the session/credits.
+      if (booking.membershipId && (oldStatus === 'attended' || oldStatus === 'no-show')) {
+        const membership = await MembershipModel.findById(booking.membershipId);
+        const cls = await ClassModel.findById(booking.classId);
+        if (membership) {
+          if (membership.classesRemaining !== -1) membership.classesRemaining += 1;
+          if (membership.creditsRemaining > 0) membership.creditsRemaining += (cls?.creditCost || 1);
+          await membership.save();
+        }
       }
-    );
+    }
   } else {
     // Attempting to restore
     // Handle restoration safety (optional capacity check if logic requires it)
@@ -367,12 +431,12 @@ export const deleteSession = asyncHandler(async (req, res) => {
     session.cancelledBy = undefined;
     session.cancelledAt = undefined;
   }
-  
+
   const saved = await session.save();
-  res.json({ 
-    message: `Session status updated to ${saved.status}`, 
+  res.json({
+    message: `Session status updated to ${saved.status}`,
     status: saved.status,
-    cancellationReason: saved.cancellationReason 
+    cancellationReason: saved.cancellationReason
   });
 });
 
@@ -411,7 +475,7 @@ export const updateTrainerStatus = asyncHandler(async (req, res) => {
 
   const TrainerModel = mongoose.model('Trainer');
   const trainer = await TrainerModel.findOne({ userId: req.user._id });
-  
+
   if (trainer) {
     if (session.trainerId && session.trainerId.toString() === trainer._id.toString()) {
       isAssignedTrainer = true;
@@ -424,6 +488,22 @@ export const updateTrainerStatus = asyncHandler(async (req, res) => {
   if (!isAdmin && !isAssignedTrainer && !isClaimable) {
     res.status(403);
     throw new Error('Not authorized to update trainer status for this session');
+  }
+
+  // Keep random sessions visible to all trainers until one of them accepts.
+  // A trainer pressing "Reject" on an unclaimed slot should not globally hide it.
+  if (isClaimable && trainerStatus === 'rejected') {
+    session.trainerStatus = 'pending';
+    const saved = await session.save();
+    return res.json(saved);
+  }
+
+  // If an assigned trainer rejects, reopen the slot so other trainers can claim it.
+  if (isAssignedTrainer && trainerStatus === 'rejected' && !isAdmin) {
+    session.trainerId = null;
+    session.trainerStatus = 'pending';
+    const saved = await session.save();
+    return res.json(saved);
   }
 
   // If claiming an unassigned session
@@ -499,7 +579,8 @@ export const bulkCreateSessions = asyncHandler(async (req, res) => {
         capacity: capacity ?? classItem.capacity,
         location,
         status: 'scheduled',
-        locationId
+        locationId,
+        isManual: true
       });
 
       if (trainerId) {

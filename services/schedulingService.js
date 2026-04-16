@@ -26,6 +26,9 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
 
   if (targetDays.length === 0) return []; // Safety check
 
+  // Ensure we have at least one slot if days are selected (Part 17 Fallback)
+  const finalSlots = (preferredSlots && preferredSlots.length > 0) ? preferredSlots : ['10:00 AM'];
+
   // Loop until we reach the end date or the max sessions count
   while (currentDate <= endDate && sessionsCreated < maxSessions) {
     const dayOfWeek = currentDate.getDay();
@@ -33,11 +36,11 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
     if (targetDays.includes(dayOfWeek)) {
       // For each preferred slot on this day
       // Robust Time Parsing
-      for (const slot of preferredSlots) {
+      for (const slot of finalSlots) {
         if (sessionsCreated >= maxSessions) break;
 
-        // Use regex for robust extraction: handles "09:00 AM", "9:00am", "10:30 ", etc.
-        const timeMatch = slot.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/);
+        // Use regex for robust extraction: handles "10Am", "9:00am", "10:30 PM", etc.
+        const timeMatch = slot.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?$/i);
         
         if (!timeMatch) {
           console.warn(`[schedulingService] Skipping invalid time slot format: "${slot}"`);
@@ -46,7 +49,7 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
 
         let [_, hoursStr, minutesStr, modifier] = timeMatch;
         let hours = parseInt(hoursStr, 10);
-        const minutes = parseInt(minutesStr, 10);
+        const minutes = parseInt(minutesStr || '0', 10);
 
         if (modifier) {
           modifier = modifier.toUpperCase();
@@ -67,25 +70,69 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
         if (sessionDate < new Date()) {
            // Skip if already passed today
         } else {
-            // DE-DUPLICATION LOGIC: Find existing session for this plan/time/location
+            const effectiveLocationId = locationId || plan.locationId || membership.locationId;
+
+            // DE-DUPLICATION LOGIC: Find any existing session at this time/location
+            // Priority:
+            // 1. Session linked to this specific Plan
+            // 2. Session linked to the parent Class (if plan.classId is set)
             let targetSessionId;
-            const existingSession = await Session.findOne({
-                classId: plan._id,
-                classType: 'Plan',
+            const sessionMatchQuery = {
+                classId: plan._id, // Group by Package/Plan
                 startTime: sessionDate,
-                locationId: locationId,
-                status: 'scheduled'
-            }).session(dbSession);
+                status: 'scheduled',
+                $and: [
+                    {
+                        $or: [
+                            { locationId: effectiveLocationId },
+                            { locationId: null },
+                            { locationId: { $exists: false } }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { sessionType: sessionType || 'group' },
+                            { sessionType: { $exists: false } }
+                        ]
+                    }
+                ]
+            };
+
+            // Refined search: Look for ANY session at this exact slot
+            const existingSession = await Session.findOne(sessionMatchQuery).session(dbSession);
 
             if (existingSession) {
+                // Normalize legacy/old shared sessions so all future lookups hit the same record.
+                const needsNormalization =
+                  existingSession.classType !== 'Plan' ||
+                  !existingSession.endTime ||
+                  !existingSession.locationId ||
+                  (plan.trainerAllocation === 'fixed' && plan.trainerId && !existingSession.trainerId);
+
+                if (needsNormalization) {
+                    existingSession.classType = 'Plan';
+                    if (!existingSession.endTime) {
+                        existingSession.endTime = new Date(sessionDate.getTime() + 60 * 60 * 1000);
+                    }
+                    if (!existingSession.locationId && effectiveLocationId) {
+                        existingSession.locationId = effectiveLocationId;
+                    }
+                    if (plan.trainerAllocation === 'fixed' && plan.trainerId && !existingSession.trainerId) {
+                        existingSession.trainerId = plan.trainerId;
+                        existingSession.trainerStatus = 'accepted';
+                    }
+                    await existingSession.save({ session: dbSession });
+                }
                 targetSessionId = existingSession._id;
             } else {
                 // Create new shared session (no membershipId assigned directly to Session)
                 const sessionData = {
                     classId: plan._id,
+                    classType: 'Plan',
+                    sessionType: sessionType || 'group',
                     startTime: sessionDate,
                     endTime: new Date(sessionDate.getTime() + 60 * 60 * 1000), // Default 1 hour
-                    locationId: locationId,
+                    locationId: effectiveLocationId,
                     status: 'scheduled'
                 };
 
@@ -98,11 +145,12 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                 const newSessions = await Session.create([sessionData], { session: dbSession });
                 targetSessionId = newSessions[0]._id;
 
-                // Sync trainer to class availableTrainers
+                // Sync trainer to class/plan availableTrainers
                 if (sessionData.trainerId) {
-                    await Session.model('Class').findByIdAndUpdate(plan._id, {
+                    const TargetModel = Session.model(sessionData.classType);
+                    await TargetModel.findByIdAndUpdate(plan._id, {
                         $addToSet: { availableTrainers: sessionData.trainerId }
-                    });
+                    }).catch(() => {}); // Silent fail if model/ID doesn't support availableTrainers
                 }
             }
 

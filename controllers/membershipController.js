@@ -17,16 +17,24 @@ import { calculateTax } from '../utils/taxCalculator.js';
 import { getNextInvoiceNumber, getNextBookingNumber } from '../utils/sequenceGenerator.js';
 import Attendance from '../models/Attendance.js';
 
-const addWeeks = (date, weeks) => new Date(date.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
-const addMonths = (date, months) => {
-  const newDate = new Date(date);
-  newDate.setMonth(newDate.getMonth() + months);
-  return newDate;
+const addDays = (date, days) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + Number(days));
+  return result;
 };
+
+const addWeeks = (date, weeks) => addDays(date, weeks * 7);
+
+const addMonths = (date, months) => {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + Number(months));
+  return result;
+};
+
 const addYears = (date, years) => {
-  const newDate = new Date(date);
-  newDate.setFullYear(newDate.getFullYear() + years);
-  return newDate;
+  const result = new Date(date);
+  result.setFullYear(result.getFullYear() + Number(years));
+  return result;
 };
 
 export const getMyMemberships = asyncHandler(async (req, res) => {
@@ -158,6 +166,12 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
                             bookingId: booking._id,
                             userId: m.userId?._id || m.userId,
                             amount: booking.totalAmount || plan.price,
+                            grossAmount: plan.price,
+                            totalAmount: booking.totalAmount || plan.price,
+                            taxAmount: booking.taxAmount || 0,
+                            discountAmount: booking.discountAmount || 0,
+                            couponAmount: booking.couponAmount || 0,
+                            couponCode: booking.couponCode,
                             status: 'paid',
                             locationId: m.locationId,
                             items: [{
@@ -238,7 +252,28 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
 });
 
 export const createMembership = asyncHandler(async (req, res) => {
-  const { planId, autoRenew, paymentId, childId, preferredDays, preferredSlots, sessionsPerWeek, claimBogo, bogoChildId, couponCode, couponAmount, membershipUnits: reqUnits, startDate: reqStartDate } = req.body;
+  const {
+    planId,
+    autoRenew,
+    paymentId,
+    childId,
+    preferredDays,
+    preferredSlots: reqPreferredSlots,
+    sessionsPerWeek,
+    claimBogo,
+    bogoChildId,
+    couponCode,
+    couponAmount,
+    discountAmount: reqDiscountAmount,
+    membershipUnits: reqUnits,
+    startDate: reqStartDate
+  } = req.body;
+
+  // FALLBACK (Part 17): Ensure preferredSlots is never empty if days are picked.
+  // This prevents memberships from being created with 0 sessions.
+  const preferredSlots = (preferredDays?.length > 0 && (!reqPreferredSlots || reqPreferredSlots.length === 0))
+    ? ['10:00 AM'] // Default to 10:00 AM if no time picked but days are selected
+    : (reqPreferredSlots || []);
   if (!planId) {
     res.status(400);
     throw new Error('planId is required');
@@ -271,19 +306,46 @@ export const createMembership = asyncHandler(async (req, res) => {
     } else if (plan.billingCycle === 'yearly') {
       endDate = addYears(startDate, 1);
     }
+  } else if (plan.durationValue && plan.durationUnit) {
+    if (plan.durationUnit === 'days') {
+      endDate = addDays(startDate, plan.durationValue);
+    } else if (plan.durationUnit === 'weeks') {
+      endDate = addWeeks(startDate, plan.durationValue);
+    } else if (plan.durationUnit === 'months') {
+      endDate = addMonths(startDate, plan.durationValue);
+    }
   } else if (plan.durationWeeks) {
     endDate = addWeeks(startDate, plan.durationWeeks);
   }
 
+  // -1 = unlimited/time-based (classesIncluded is 0 or null, or explicit type)
+  const isInfinite = plan.classesIncluded === 0 || plan.type === 'unlimited' || plan.type === 'time-based';
+  
   let baseClasses = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : 0);
-  let classesRemaining = baseClasses * membershipUnits;
+  let classesRemaining = isInfinite ? -1 : baseClasses * membershipUnits;
+  
+  // Credits initialization
+  let creditsRemaining = (plan.type === 'credit-based' && plan.creditsIncluded) 
+    ? plan.creditsIncluded * membershipUnits 
+    : 0;
+
   let finalEndDate = endDate;
   let isConsolidatedBogo = false;
 
   // CONSOLIDATED BOGO PRE-CHECK (Same Child)
   if (paymentId && claimBogo && (String(bogoChildId) === String(childId) || (!bogoChildId && !childId))) {
-    if (classesRemaining) classesRemaining *= 2;
-    if (plan.durationWeeks) {
+    if (classesRemaining !== -1) classesRemaining *= 2;
+    if (creditsRemaining > 0) creditsRemaining *= 2;
+
+    if (plan.durationValue && plan.durationUnit) {
+      if (plan.durationUnit === 'days') {
+        finalEndDate = addDays(finalEndDate, plan.durationValue);
+      } else if (plan.durationUnit === 'weeks') {
+        finalEndDate = addWeeks(finalEndDate, plan.durationValue);
+      } else if (plan.durationUnit === 'months') {
+        finalEndDate = addMonths(finalEndDate, plan.durationValue);
+      }
+    } else if (plan.durationWeeks) {
       finalEndDate = addWeeks(finalEndDate, plan.durationWeeks);
     } else if (plan.billingCycle === 'weekly') {
       finalEndDate = addWeeks(finalEndDate, 1);
@@ -309,12 +371,13 @@ export const createMembership = asyncHandler(async (req, res) => {
       endDate: finalEndDate,
       autoRenew: Boolean(autoRenew),
       classesRemaining,
+      creditsRemaining,
       childId,
       preferredDays,
       preferredSlots,
       sessionsPerWeek,
       paymentId,
-      locationId: plan.locationId,
+      locationId: plan.locationId || resolveReadLocationId(req),
       membershipUnits
     }], { session });
 
@@ -331,7 +394,10 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     let resolvedPaymentMethod = payRec ? payRec.paymentMethod : 'center';
     let promotionId = payRec ? payRec.promotionId : null;
-    let discountAmount = payRec ? payRec.discountAmount || 0 : 0;
+    const discountAmount = Number(payRec?.discountAmount ?? reqDiscountAmount ?? 0) || 0;
+    const resolvedCouponAmount = Number(couponAmount ?? payRec?.couponAmount ?? 0) || 0;
+    const resolvedCouponCodeRaw = (couponCode ?? payRec?.couponCode ?? '').toString().trim();
+    const resolvedCouponCode = resolvedCouponCodeRaw ? resolvedCouponCodeRaw.toUpperCase() : undefined;
 
     const primaryChild = await Child.findById(childId).session(session);
     const participants = [];
@@ -397,7 +463,7 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     // TAX & PRICE CALCULATION
     const rawBaseAmount = plan.price * membershipUnits;
-    const netBaseAmount = Math.max(0, rawBaseAmount - discountAmount - (couponAmount || 0));
+    const netBaseAmount = Math.max(0, rawBaseAmount - discountAmount - resolvedCouponAmount);
 
     let taxAmount = 0;
     let activeTax = null;
@@ -420,6 +486,18 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     const totalAmount = (activeTax?.calculationMethod === 'inclusive') ? netBaseAmount : (netBaseAmount + taxAmount);
 
+    // Keep payment snapshot in sync with the finalized payable amount from booking logic.
+    if (payRec) {
+      payRec.userId = targetUserId;
+      payRec.amount = totalAmount;
+      payRec.promotionId = promotionId;
+      payRec.discountAmount = discountAmount;
+      payRec.couponCode = resolvedCouponCode;
+      payRec.couponAmount = resolvedCouponAmount;
+      payRec.membershipUnits = membershipUnits;
+      await payRec.save({ session });
+    }
+
     const [bookingRec] = await Booking.create([{
       userId: targetUserId,
       bookingNumber,
@@ -436,8 +514,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       locationId: plan.locationId,
       promotionId,
       discountAmount,
-      couponCode,
-      couponAmount,
+      couponCode: resolvedCouponCode,
+      couponAmount: resolvedCouponAmount,
       participants
     }], { session });
 
@@ -475,12 +553,12 @@ export const createMembership = asyncHandler(async (req, res) => {
        });
     }
 
-    if (couponAmount > 0) {
+    if (resolvedCouponAmount > 0) {
        invoiceItems.push({
-          description: `Cash Voucher Applied (${couponCode})`,
+          description: resolvedCouponCode ? `Cash Voucher Applied (${resolvedCouponCode})` : 'Cash Voucher Applied',
           quantity: 1,
-          unitPrice: -couponAmount,
-          total: -couponAmount
+          unitPrice: -resolvedCouponAmount,
+          total: -resolvedCouponAmount
        });
     }
 
@@ -489,13 +567,15 @@ export const createMembership = asyncHandler(async (req, res) => {
        bookingId: bookingRec._id,
        userId: targetUserId,
        amount: totalAmount,
+       grossAmount: plan.price * membershipUnits,
+       totalAmount: totalAmount,
        taxAmount: taxAmount,
        status: resolvedPaymentMethod === 'center' ? 'unpaid' : 'paid',
        items: invoiceItems,
        locationId: plan.locationId,
        discountAmount: discountAmount || 0,
-       couponAmount: couponAmount || 0,
-       couponCode: couponCode
+       couponAmount: resolvedCouponAmount || 0,
+       couponCode: resolvedCouponCode
     }], { session });
     
     // COUPON GENERATION LOGIC (Cash Deposit Promo)
@@ -524,8 +604,8 @@ export const createMembership = asyncHandler(async (req, res) => {
     }
 
     // COUPON REDEMPTION LOGIC
-    if (couponCode) {
-       const redeemedCoupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: 'active' }).session(session);
+    if (resolvedCouponCode) {
+       const redeemedCoupon = await Coupon.findOne({ code: resolvedCouponCode, status: 'active' }).session(session);
        if (redeemedCoupon) {
           redeemedCoupon.status = 'redeemed';
           redeemedCoupon.redeemBookingId = bookingRec._id;
@@ -608,4 +688,66 @@ export const getMembershipByBookingId = asyncHandler(async (req, res) => {
   }
 
   res.json(membership);
+});
+
+// @desc    Toggle Membership Freeze
+// @route   POST /api/memberships/:id/freeze
+// @access  Private
+export const toggleFreeze = asyncHandler(async (req, res) => {
+  const membership = await Membership.findById(req.params.id).populate('planId');
+  if (!membership) {
+    res.status(404);
+    throw new Error('Membership not found');
+  }
+
+  // Permission: Admin or the student
+  const isOwner = membership.userId.toString() === req.user._id.toString();
+  const isAdmin = ['admin', 'superadmin', 'manager'].includes(req.user.role || '');
+  if (!isOwner && !isAdmin) {
+    res.status(403);
+    throw new Error('Not allowed to freeze this membership');
+  }
+
+  const { reason } = req.body;
+
+  if (membership.status === 'active') {
+    // FREEZE
+    if (membership.planId && !membership.planId.extensionRules?.allowFreezing && !isAdmin) {
+       res.status(400);
+       throw new Error('Your plan does not allow freezing. Please contact center.');
+    }
+
+    membership.status = 'frozen';
+    membership.freezeHistory.push({
+      startDate: new Date(),
+      reason: reason || 'User requested pause',
+      processedBy: req.user._id
+    });
+    
+    await membership.save();
+    return res.json({ message: 'Membership frozen successfully', status: 'frozen' });
+  } else if (membership.status === 'frozen') {
+    // UNFREEZE
+    const lastFreeze = membership.freezeHistory[membership.freezeHistory.length - 1];
+    if (lastFreeze && !lastFreeze.endDate) {
+       lastFreeze.endDate = new Date();
+       
+       // Calculate Duration and extend membership end date
+       const diffTime = Math.abs(lastFreeze.endDate - lastFreeze.startDate);
+       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+       
+       if (diffDays > 0) {
+          const oldEnd = new Date(membership.endDate);
+          membership.endDate = new Date(oldEnd.setDate(oldEnd.getDate() + diffDays));
+          membership.previousEndDate = oldEnd;
+       }
+    }
+
+    membership.status = 'active';
+    await membership.save();
+    return res.json({ message: 'Membership unfrozen successfully. End date extended.', status: 'active', newEndDate: membership.endDate });
+  } else {
+    res.status(400);
+    throw new Error('Only active or frozen memberships can be toggled.');
+  }
 });
