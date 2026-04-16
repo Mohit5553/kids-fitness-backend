@@ -24,7 +24,7 @@ const bookingSchema = new mongoose.Schema(
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session' },
     date: { type: Date, required: true },
     totalAmount: { type: Number, required: true },
-    status: { type: String, enum: ['pending', 'confirmed', 'attended', 'cancelled', 'completed'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'confirmed', 'attended', 'cancelled', 'completed', 'no-show', 'trainer-cancelled'], default: 'pending' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     paymentMethod: { type: String, default: 'center' },
     paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },

@@ -4,6 +4,7 @@ const sessionSchema = new mongoose.Schema(
   {
     classId: { type: mongoose.Schema.Types.ObjectId, refPath: 'classType', required: true },
     classType: { type: String, enum: ['Class', 'Plan'], default: 'Class' },
+    sessionType: { type: String, enum: ['group', 'personal'], default: 'group' },
     trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
     startTime: { type: Date, required: true },
     endTime: { type: Date },
@@ -17,7 +18,8 @@ const sessionSchema = new mongoose.Schema(
     cancelledAt: { type: Date },
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
     attendanceStatus: { type: String, enum: ['booked', 'present', 'absent'], default: 'booked' },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    isManual: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

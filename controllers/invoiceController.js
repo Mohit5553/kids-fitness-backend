@@ -77,6 +77,11 @@ const generateInvoiceFromBooking = async (booking) => {
   const basePrice = (booking.totalAmount + (booking.discountAmount || 0) + (booking.couponAmount || 0));
   const baseRate = (basePrice - (booking.taxAmount || 0)) / (isBogo ? 2 : baseQty);
 
+  // Gross amount = sum of positive line items (before any discounts/coupons/tax)
+  const grossAmount = baseRate * baseQty;
+  // Total amount = final net amount paid (including tax)
+  const totalAmount = booking.totalAmount;
+
   const invoiceData = {
     invoiceNumber,
     bookingId: booking._id,
@@ -95,6 +100,8 @@ const generateInvoiceFromBooking = async (booking) => {
       }
     ],
     taxAmount: booking.taxAmount || 0,
+    grossAmount,
+    totalAmount,
     discountAmount: booking.discountAmount || 0,
     couponAmount: booking.couponAmount || 0,
     couponCode: booking.couponCode

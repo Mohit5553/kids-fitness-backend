@@ -70,10 +70,18 @@ export const processExtension = asyncHandler(async (req, res) => {
     } else if (request.type === 'extend') {
       const membership = await Membership.findById(request.membershipId);
       if (membership) {
-        // Extend by 7 days or based on buffer
-        const buffer = 7; 
-        const currentEnd = new Date(membership.endDate);
-        membership.endDate = new Date(currentEnd.getTime() + buffer * 24 * 60 * 60 * 1000);
+        // Save the old end date before changing it
+        membership.previousEndDate = membership.endDate;
+
+        if (request.newDate) {
+          // Use the exact date requested by the member
+          membership.endDate = new Date(request.newDate);
+        } else {
+          // Fallback: add 7 days
+          const buffer = 7;
+          const currentEnd = new Date(membership.endDate);
+          membership.endDate = new Date(currentEnd.getTime() + buffer * 24 * 60 * 60 * 1000);
+        }
         await membership.save();
       }
     }

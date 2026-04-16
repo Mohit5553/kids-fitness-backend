@@ -136,6 +136,9 @@ export const createPayment = asyncHandler(async (req, res) => {
     throw new Error('Amount is required');
   }
 
+  const isStaff = req.user && !['parent', 'customer'].includes((req.user.role || '').toLowerCase());
+  const targetUserId = (isStaff && userId) ? userId : req.user._id;
+
   let locationId = null;
   if (bookingId) {
     const booking = await Booking.findById(bookingId);
@@ -151,7 +154,7 @@ export const createPayment = asyncHandler(async (req, res) => {
   }
 
   const created = await Payment.create({
-    userId: req.user._id,
+    userId: targetUserId,
     bookingId,
     planId,
     membershipId,
@@ -197,19 +200,25 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
     throw new Error('Class not found');
   }
 
+  const effectiveDiscount = Number(discountAmount ?? booking.discountAmount ?? 0) || 0;
+  const effectiveCouponAmount = Number(couponAmount ?? booking.couponAmount ?? 0) || 0;
+  const effectiveCouponCodeRaw = (couponCode ?? booking.couponCode ?? '').toString().trim();
+  const effectiveCouponCode = effectiveCouponCodeRaw ? effectiveCouponCodeRaw.toUpperCase() : undefined;
+  const bookingTotal = Number(booking.totalAmount || classItem.price || 0) || 0;
+
   const created = await Payment.create({
     userId: req.user._id,
     bookingId,
-    amount: classItem.price,
+    amount: bookingTotal,
     paymentMethod: paymentMethod || 'card',
     status: 'paid',
     reference,
     last4,
     locationId: booking.locationId,
     promotionId,
-    discountAmount,
-    couponCode,
-    couponAmount
+    discountAmount: effectiveDiscount,
+    couponCode: effectiveCouponCode,
+    couponAmount: effectiveCouponAmount
   });
 
   booking.status = 'confirmed';
@@ -217,12 +226,49 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
   booking.paymentReference = reference;
   booking.paymentId = created._id;
   booking.paymentDate = new Date();
+  booking.discountAmount = effectiveDiscount;
+  booking.couponAmount = effectiveCouponAmount;
+  booking.couponCode = effectiveCouponCode;
   await booking.save();
 
   // Sync Invoice Status: Mark official invoice as paid
   const invoiceRec = await Invoice.findOne({ bookingId: booking._id });
   if (invoiceRec) {
     invoiceRec.status = 'paid';
+    invoiceRec.amount = booking.totalAmount;
+    invoiceRec.totalAmount = booking.totalAmount;
+    invoiceRec.taxAmount = booking.taxAmount || 0;
+    invoiceRec.discountAmount = effectiveDiscount;
+    invoiceRec.couponAmount = effectiveCouponAmount;
+    invoiceRec.couponCode = effectiveCouponCode;
+
+    const existingItems = Array.isArray(invoiceRec.items) ? [...invoiceRec.items] : [];
+    const cleanedItems = existingItems.filter((item) => {
+      const desc = (item.description || '').toLowerCase();
+      const isNeg = (item.unitPrice || 0) < 0 || (item.total || 0) < 0;
+      const isDiscountOrCoupon = /discount|coupon|voucher/.test(desc);
+      return !(isNeg && isDiscountOrCoupon);
+    });
+
+    if (effectiveDiscount > 0) {
+      cleanedItems.push({
+        description: 'Promotion Discount',
+        quantity: 1,
+        unitPrice: -effectiveDiscount,
+        total: -effectiveDiscount
+      });
+    }
+
+    if (effectiveCouponAmount > 0) {
+      cleanedItems.push({
+        description: effectiveCouponCode ? `Cash Voucher Applied (${effectiveCouponCode})` : 'Cash Voucher Applied',
+        quantity: 1,
+        unitPrice: -effectiveCouponAmount,
+        total: -effectiveCouponAmount
+      });
+    }
+
+    invoiceRec.items = cleanedItems;
     await invoiceRec.save();
   }
 

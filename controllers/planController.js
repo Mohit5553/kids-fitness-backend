@@ -50,22 +50,49 @@ export const getPlans = asyncHandler(async (req, res) => {
 });
 
 export const createPlan = asyncHandler(async (req, res) => {
-  const { name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, trainerAllocation, trainerId, extensionRules } = req.body;
+  const { 
+    name, price, benefits, type, classesIncluded, 
+    durationWeeks, durationValue, durationUnit,
+    validity, validityValue, validityUnit,
+    billingCycle, tagline, isFeatured, sessionType, 
+    validDays, timeSlots, trainerAllocation, trainerId, extensionRules 
+  } = req.body;
+
   if (!name || price == null) {
     res.status(400);
     throw new Error('Name and price are required');
   }
+
   const locationId = resolveWriteLocationId(req);
-  // Superadmin can create global plans; admins must have a location
   if (req.user?.role !== 'superadmin' && !locationId) {
     res.status(400);
     throw new Error('Location is required');
   }
 
-  // Ensure empty string is null for trainerId to avoid BSON error
+  // Auto-generate validity string if value/unit provided
+  let finalValidity = validity;
+  if (validityValue && validityUnit) {
+    finalValidity = `${validityValue} ${validityUnit}`;
+  }
+
+  // Auto-calculate durationWeeks if value/unit provided
+  let finalDurationWeeks = durationWeeks;
+  if (durationValue && durationUnit) {
+    if (durationUnit === 'days') finalDurationWeeks = durationValue / 7;
+    else if (durationUnit === 'weeks') finalDurationWeeks = durationValue;
+    else if (durationUnit === 'months') finalDurationWeeks = durationValue * 4.34; // Approx
+  }
+
   const finalTrainerId = (trainerAllocation === 'fixed' && trainerId) ? trainerId : null;
 
-  const created = await Plan.create({ name, price, validity, benefits, type, classesIncluded, durationWeeks, billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId });
+  const created = await Plan.create({ 
+    name, price, 
+    validity: finalValidity, validityValue, validityUnit,
+    benefits, type, classesIncluded, 
+    durationWeeks: finalDurationWeeks, durationValue, durationUnit,
+    billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, 
+    trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId 
+  });
   res.status(201).json(created);
 });
 
@@ -75,17 +102,25 @@ export const updatePlan = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Plan not found');
   }
-  // Restrict admins to their own location
+
   if (req.user?.role === 'admin' && req.user.locationId && plan.locationId?.toString() !== req.user.locationId.toString()) {
     res.status(403);
     throw new Error('Not allowed');
   }
 
   const updates = { ...req.body };
-  // Handle 'all' as null for global plans from UI
   if (updates.locationId === 'all') updates.locationId = null;
 
-  // Ensure empty string is null for trainerId to avoid BSON error
+  // Sync logic for updates
+  if (updates.validityValue && updates.validityUnit) {
+    updates.validity = `${updates.validityValue} ${updates.validityUnit}`;
+  }
+  if (updates.durationValue && updates.durationUnit) {
+    if (updates.durationUnit === 'days') updates.durationWeeks = updates.durationValue / 7;
+    else if (updates.durationUnit === 'weeks') updates.durationWeeks = updates.durationValue;
+    else if (updates.durationUnit === 'months') updates.durationWeeks = updates.durationValue * 4.34;
+  }
+
   if (updates.trainerId === '') updates.trainerId = null;
   if (updates.trainerAllocation === 'random') updates.trainerId = null;
 
