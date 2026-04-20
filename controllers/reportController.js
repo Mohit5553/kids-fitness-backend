@@ -155,24 +155,69 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .lean();
       break;
 
-    case 'bookings':
+    case 'bookings': {
       // For bookings, we might want to filter by 'date' instead of 'createdAt' for the actual class date
       const bookingDateFilter = {};
+      const attendanceDateFilter = {};
       if (sDate && eDate) {
-        bookingDateFilter.date = {
-          $gte: sDate,
-          $lte: eDate
-        };
+        bookingDateFilter.date = { $gte: sDate, $lte: eDate };
+        attendanceDateFilter.checkedInAt = { $gte: sDate, $lte: eDate };
       }
-      data = await Booking.find({ ...filter, ...bookingDateFilter })
+
+      const [bookings, membershipSessions] = await Promise.all([
+        Booking.find({ ...filter, ...bookingDateFilter })
+          .populate('userId', 'name email phone')
+          .populate('classId', 'title capacity price')
+          .populate('planId', 'name')
+          .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+          .populate('promotionId', 'name')
+          .populate('locationId', 'name')
+          .populate('processedBy', 'name')
+          .sort({ date: -1 })
+          .lean(),
+        Attendance.find({ 
+          ...filter, 
+          ...attendanceDateFilter, 
+          membershipId: { $exists: true } 
+        })
+        .populate({ path: 'sessionId', populate: [
+          { path: 'trainerId', select: 'name' },
+          { path: 'classId', select: 'title' }
+        ] })
         .populate('userId', 'name email phone')
-        .populate('classId', 'title capacity price')
-        .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+        .populate('childId', 'name')
+        .populate('membershipId', 'bookingNumber')
         .populate('locationId', 'name')
-        .populate('processedBy', 'name')
-        .sort({ date: -1 })
-        .lean();
+        .lean()
+      ]);
+
+      // Enrich Purchases
+      const purchases = bookings.map(b => {
+        if (b.bookingType === 'package' && b.planId) {
+          b.classId = { ...b.classId, title: `${b.planId.name} (Package)` };
+        }
+        return b;
+      });
+
+      // Enrich Membership Sessions
+      const sessions = membershipSessions.map(att => ({
+        _id: att._id,
+        bookingNumber: `MR-${att.membershipId?.bookingNumber || 'SESS'}-${att._id.toString().slice(-4).toUpperCase()}`,
+        userId: att.userId,
+        participants: att.childId ? [{ name: att.childId.name, childId: att.childId._id }] : [{ name: att.participantName || 'Unknown Student' }],
+        classId: att.sessionId?.classId || { title: 'Membership Session' },
+        sessionId: att.sessionId,
+        date: att.sessionId?.startTime || att.checkedInAt,
+        totalAmount: 0,
+        status: 'confirmed',
+        paymentStatus: 'completed',
+        method: att.method === 'qr' ? 'Member QR' : 'Member Manual',
+        locationId: att.locationId
+      })).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      data = { purchases, sessions };
       break;
+    }
 
     case 'trials':
       data = await Trial.find({ ...filter, ...dateFilter })
@@ -235,7 +280,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       }));
       break;
 
-    case 'attendance':
+    case 'attendance': {
       const attendanceDateFilter = {};
       if (sDate && eDate) {
         attendanceDateFilter.checkedInAt = {
@@ -252,6 +297,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .sort({ checkedInAt: -1 })
         .lean();
       break;
+    }
 
     case 'promotions_usage':
       // Aggregate usage per promotion

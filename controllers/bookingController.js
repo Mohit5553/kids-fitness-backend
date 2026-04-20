@@ -77,11 +77,8 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   if (sessionId) {
       const targetSession = await Session.findById(sessionId);
       if (targetSession) {
-          // If session is a 'Class', only show walk-in bookings (filter out virtual memberships)
-          // Even if they are linked in the DB, we hide them to ensure strict separation.
           if (targetSession.classType === 'Class') {
-              filtered = filtered.filter(b => !b.isVirtualMembership && b.bookingType !== 'package');
-              return res.status(200).json(filtered); // Return early to avoid adding memberships
+              // We previously filtered out packages/memberships here, but now we allow all participants to be shown.
           } else {
               // If session is a 'Plan', only show membership-based students
               const relevantMemberships = await Membership.find({ 
@@ -95,8 +92,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
               const attendances = await Attendance.find({ sessionId });
               const attendedMemberIds = attendances.map(a => a.membershipId?.toString()).filter(Boolean);
 
-              // Clear non-membership bookings from a 'Plan' session (just in case they were misassigned)
-              filtered = filtered.filter(b => b.isVirtualMembership || b.bookingType === 'package');
+              // Include all existing bookings for the Plan session.
 
               relevantMemberships.forEach(membership => {
                   const alreadyExists = filtered.some(b => 
@@ -142,6 +138,40 @@ export const getAllBookings = asyncHandler(async (req, res) => {
           }
       }
   }
+
+  // For package bookings in the main list, attach their membership info
+  const packageBookings = filtered.filter(b => b.bookingType === 'package' && !b.isVirtualMembership);
+  if (packageBookings.length > 0) {
+    const bookingIds = packageBookings.map(b => b._id);
+    const memberships = await Membership.find({ bookingId: { $in: bookingIds } });
+    
+    // Map and return, ensuring all items are preserved
+    filtered = filtered.map(b => {
+      if (b.bookingType === 'package' && !b.isVirtualMembership) {
+        const plain = b.toObject ? b.toObject() : { ...b };
+        const mbr = memberships.find(m => String(m.bookingId) === String(b._id));
+        if (mbr) {
+          plain.membershipEndDate = mbr.endDate;
+          plain.classesRemaining = mbr.classesRemaining;
+        }
+        return plain;
+      }
+      return b;
+    });
+  }
+
+  // AUTO-COMPLETE DISPLAY LOGIC
+  const now = new Date();
+  filtered = filtered.map(b => {
+    const bookingDate = b.date || b.sessionId?.startTime;
+    if (b.status === 'attended' && bookingDate && new Date(bookingDate) < now) {
+       // If it's a plain search result, it might be a Mongoose object, so convert it
+       const plain = b.toObject ? b.toObject() : { ...b };
+       plain.status = 'completed';
+       return plain;
+    }
+    return b;
+  });
 
   res.json(filtered);
 });
@@ -299,6 +329,22 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
   const created = await Booking.create(bookingData);
+
+  // COUPON REDEMPTION LOGIC
+  if (req.body.couponCode) {
+    const coupon = await Coupon.findOne({ code: req.body.couponCode.toUpperCase(), status: 'active' });
+    if (coupon) {
+      coupon.status = 'redeemed';
+      coupon.redeemBookingId = created._id;
+      coupon.redeemedAt = new Date();
+      // Link user if not already set
+      if (!coupon.userId && created.userId) {
+        coupon.userId = created.userId;
+      }
+      await coupon.save();
+    }
+  }
+
   const invoiceNumber = await getNextInvoiceNumber();
   const invoiceItems = [{ description: `${classItem.title} - Session Booking`, quantity: participants.length, unitPrice: classItem.price || 0, total: (classItem.price || 0) * participants.length }];
   if (req.body.claimBogo) invoiceItems.push({ description: `BOGO Free Item - ${classItem.title}`, quantity: participants.length, unitPrice: 0, total: 0 });
@@ -373,6 +419,23 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
     const existingAttendance = await Attendance.findOne(filter);
     const session = await Session.findById(sessionId).populate('classId');
+
+    // LOCK LOGIC FOR MEMBERSHIP SESSIONS
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    if (existingAttendance && (existingAttendance.status === 'present' || existingAttendance.status === 'completed')) {
+        res.status(400);
+        throw new Error('Attendance has already been marked as complete and cannot be changed.');
+    }
+    
+    // LOCK LOGIC FOR MEMBERSHIP SESSIONS (Virtual Bookings)
+    // For single check-ins, we lock if the session date has passed.
+    if (session && new Date(session.startTime) < startOfToday) {
+        res.status(400);
+        throw new Error('This session has already passed and its attendance cannot be changed.');
+    }
+
     const creditCost = session?.classId?.creditCost || 1;
 
     if (!existingAttendance && ['attended', 'no-show'].includes(status)) {
@@ -381,14 +444,61 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
       await membership.save();
     }
 
-    await Attendance.findOneAndUpdate(filter, { ...filter, participantName: membership.childId?.name || membership.userId?.name, locationId: membership.locationId, status: status === 'attended' ? 'present' : 'absent', method: 'manual', checkedInAt: new Date() }, { upsert: true, new: true });
+    // Auto-switch 'attended' to 'completed' for memberships
+    const targetStatus = status === 'attended' ? 'completed' : status;
+
+    await Attendance.findOneAndUpdate(filter, { ...filter, participantName: membership.childId?.name || membership.userId?.name, locationId: membership.locationId, status: (targetStatus === 'attended' || targetStatus === 'completed') ? 'present' : 'absent', method: 'manual', checkedInAt: new Date() }, { upsert: true, new: true });
     return res.json({ message: 'Attendance recorded', classesRemaining: membership.classesRemaining, creditsRemaining: membership.creditsRemaining });
   }
 
   const booking = await Booking.findById(id);
   if (!booking) throw new Error('Booking not found');
-  booking.status = status || booking.status;
-  if (status === 'confirmed') {
+
+  if (booking.status === 'completed') {
+      res.status(400);
+      throw new Error('This booking is already completed and cannot be changed.');
+  }
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  // LOCK LOGIC - DIFFERENTIATE SESSION VS PACKAGE
+  if (booking.bookingType === 'session') {
+      // For single sessions, lock if the date has passed
+      if (new Date(booking.date) < startOfToday) {
+          res.status(400);
+          throw new Error('The date for this session has passed and its status cannot be changed.');
+      }
+  } else if (booking.bookingType === 'package') {
+      // For memberships, lock ONLY if the schedule is actually complete
+      const mbr = await mongoose.model('Membership').findOne({ bookingId: booking._id });
+      if (mbr) {
+          const isExpired = mbr.endDate && new Date(mbr.endDate) < startOfToday;
+          const isUsedUp = mbr.classesRemaining === 0;
+          if (isExpired || isUsedUp) {
+              res.status(400);
+              const reason = isExpired ? 'This membership has expired' : 'This membership has no classes remaining';
+              throw new Error(`${reason} and its status cannot be changed.`);
+          }
+      }
+  }
+
+  if (status === 'cancelled' && booking.status !== 'cancelled' && booking.sessionId) {
+    const session = await Session.findById(booking.sessionId);
+    if (session && session.bookedParticipants > 0) {
+      session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
+      await session.save();
+    }
+  }
+
+  if (status === 'pending' && booking.status !== 'pending') {
+      res.status(400);
+      throw new Error('Cannot change status back to pending once it has been confirmed or processed.');
+  }
+
+  const finalStatus = status === 'attended' ? 'completed' : status;
+  booking.status = finalStatus || booking.status;
+  if (finalStatus === 'confirmed') {
     booking.paymentStatus = 'completed';
     const payRec = await Payment.findOne({ $or: [{ bookingId: booking._id }, { groupId: booking.groupId }] });
     if (payRec) {
@@ -452,6 +562,16 @@ export const deleteBooking = asyncHandler(async (req, res) => {
   if (!booking) throw new Error('Booking not found');
   const isAdmin = ['admin', 'superadmin', 'store-manager', 'store-cashier'].includes(req.user.role);
   if (!isAdmin && booking.userId.toString() !== req.user._id.toString()) throw new Error('Not allowed');
+
+  // Decrement occupancy if it was a Confirmed session booking
+  if (booking.status !== 'cancelled' && booking.sessionId) {
+    const session = await Session.findById(booking.sessionId);
+    if (session && session.bookedParticipants > 0) {
+      session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
+      await session.save();
+    }
+  }
+
   await booking.deleteOne();
   res.json({ message: 'Booking removed' });
 });
@@ -503,12 +623,28 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
         totalAmount: singleTotal,
         taxAmount: singleTax,
         groupId: groupBookingId,
-        bookingType: 'package', // Force package type for de-duplication/UI
+        bookingType: 'session', // Default to session for group/walking bookings
         status: paymentMethod === 'online' ? 'confirmed' : 'pending',
         paymentStatus: paymentMethod === 'online' ? 'completed' : 'pending'
       });
       bookings.push(b);
       totalAmount += singleTotal;
+    }
+  }
+
+  // COUPON REDEMPTION LOGIC
+  if (couponCode) {
+    const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: 'active' });
+    if (coupon) {
+      coupon.status = 'redeemed';
+      coupon.redeemBookingId = bookings[0]?._id;
+      coupon.redeemedAt = new Date();
+      // Link user if not already set
+      const targetUserId = req.body.userId || req.user?._id;
+      if (!coupon.userId && targetUserId) {
+        coupon.userId = targetUserId;
+      }
+      await coupon.save();
     }
   }
 

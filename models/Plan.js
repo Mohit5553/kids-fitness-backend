@@ -30,7 +30,8 @@ const planSchema = new mongoose.Schema(
     isFeatured: { type: Boolean, default: false },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
-    taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' }
+    taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
+    gender: { type: String, enum: ['male', 'female', 'mixed'], default: 'mixed' }
   },
   { timestamps: true }
 );

@@ -15,10 +15,15 @@ export const getMyCoupons = asyncHandler(async (req, res) => {
   res.json(coupons);
 });
 
-// @desc    Get all coupons (Admin)
-// @route   GET /api/coupons
-// @access  Private/Admin
 export const getAllCoupons = asyncHandler(async (req, res) => {
+  const now = new Date();
+  
+  // Automatically mark active vouchers as expired if the date has passed
+  await Coupon.updateMany(
+    { status: 'active', expiryDate: { $lt: now } },
+    { $set: { status: 'expired' } }
+  );
+
   const coupons = await Coupon.find({})
     .populate('userId', 'name email')
     .sort({ createdAt: -1 });

@@ -55,7 +55,7 @@ export const createPlan = asyncHandler(async (req, res) => {
     durationWeeks, durationValue, durationUnit,
     validity, validityValue, validityUnit,
     billingCycle, tagline, isFeatured, sessionType, 
-    validDays, timeSlots, trainerAllocation, trainerId, extensionRules 
+    validDays, gender, timeSlots, trainerAllocation, trainerId, extensionRules 
   } = req.body;
 
   if (!name || price == null) {
@@ -90,7 +90,7 @@ export const createPlan = asyncHandler(async (req, res) => {
     validity: finalValidity, validityValue, validityUnit,
     benefits, type, classesIncluded, 
     durationWeeks: finalDurationWeeks, durationValue, durationUnit,
-    billingCycle, tagline, isFeatured, sessionType, validDays, timeSlots, 
+    billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
     trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId 
   });
   res.status(201).json(created);

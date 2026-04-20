@@ -285,6 +285,23 @@ export const createMembership = asyncHandler(async (req, res) => {
     throw new Error('Plan not found');
   }
 
+  // GENDER VALIDATION
+  if (plan.gender && plan.gender !== 'mixed') {
+    let pGender = '';
+    if (childId) {
+       const c = await Child.findById(childId);
+       pGender = c?.gender;
+    } else {
+       pGender = req.user.gender;
+    }
+
+    // Strict validation: if we know the gender and it doesn't match, block it.
+    if (pGender && pGender !== 'other' && pGender !== plan.gender) {
+       res.status(400);
+       throw new Error(`Gender Mismatch: This membership is restricted to ${plan.gender}s only.`);
+    }
+  }
+
   // Handle automatic scaling if not explicitly provided (e.g. from older clients or direct API)
   const totalWeeklySpots = preferredDays.length * (preferredSlots?.length || 1);
   const planCapacity = plan.classesIncluded || 1;
