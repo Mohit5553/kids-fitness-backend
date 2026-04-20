@@ -41,6 +41,7 @@ import extensionRoutes from './routes/extensionRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
 import taxRoutes from './routes/taxRoutes.js';
 import couponRoutes from './routes/couponRoutes.js';
+import leadRoutes from './routes/leadRoutes.js';
 import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
@@ -110,6 +111,7 @@ app.use('/api/extensions', extensionRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/taxes', taxRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/leads', leadRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

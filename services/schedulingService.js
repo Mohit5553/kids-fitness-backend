@@ -14,23 +14,31 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
   const sessions = [];
   let currentDate = new Date(startDate);
   let sessionsCreated = 0;
-  // Prioritize membership.classesRemaining for 'Boosted' memberships, fallback to plan default
-  const maxSessions = membership.classesRemaining || classesIncluded || 999; 
+  // Handle 'Unlimited' memberships where classesRemaining is -1
+  const isUnlimited = membership.classesRemaining === -1 || plan.type === 'unlimited';
+  const maxSessions = isUnlimited ? 999 : (membership.classesRemaining || classesIncluded || 999); 
 
-  // Map day names to numbers (0=Sun, 1=Mon, ...)
+  // Map day names to numbers (0=Sun, 1=Mon, ...) - Case Insensitive
   const dayMap = {
-    'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6,
-    'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6
+    'sun': 0, 'mon': 1, 'tue': 2, 'wed': 3, 'thu': 4, 'fri': 5, 'sat': 6,
+    'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6
   };
-  const targetDays = preferredDays.map(d => dayMap[d]).filter(d => d !== undefined);
+  const targetDays = preferredDays
+    .map(d => d ? dayMap[d.toLowerCase().trim()] : undefined)
+    .filter(d => d !== undefined);
 
-  if (targetDays.length === 0) return []; // Safety check
+  if (targetDays.length === 0) {
+    console.warn(`[schedulingService] No valid target days found in: ${JSON.stringify(preferredDays)}`);
+    return [];
+  }
 
   // Ensure we have at least one slot if days are selected (Part 17 Fallback)
   const finalSlots = (preferredSlots && preferredSlots.length > 0) ? preferredSlots : ['10:00 AM'];
 
   // Loop until we reach the end date or the max sessions count
-  while (currentDate <= endDate && sessionsCreated < maxSessions) {
+  const normalizedEndDate = new Date(endDate);
+  
+  while (currentDate <= normalizedEndDate && sessionsCreated < maxSessions) {
     const dayOfWeek = currentDate.getDay();
 
     if (targetDays.includes(dayOfWeek)) {
