@@ -5,6 +5,7 @@ import Booking from '../models/Booking.js';
 import mongoose from 'mongoose';
 import { signQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId } from '../utils/locationScope.js';
+import { sendTrainerSessionReminderEmail } from '../utils/mailer.js';
 
 // @desc    Get all sessions with filters
 // @route   GET /api/sessions
@@ -600,4 +601,46 @@ export const bulkCreateSessions = asyncHandler(async (req, res) => {
     message: `${successCount} out of ${sessionsData.length} sessions created.`,
     results
   });
+});
+// @desc    Send manual reminder to trainer
+// @route   POST /api/sessions/:id/trainer-reminder
+// @access  Private/Admin
+export const sendTrainerReminder = asyncHandler(async (req, res) => {
+  const session = await Session.findById(req.params.id)
+    .populate('classId', 'title name')
+    .populate('trainerId', 'name email');
+
+  if (!session) {
+    res.status(404);
+    throw new Error('Session not found');
+  }
+
+  if (!session.trainerId) {
+    res.status(400);
+    throw new Error('No trainer assigned to this session');
+  }
+
+  const MembershipModel = mongoose.model('Membership');
+  const memberships = await MembershipModel.countDocuments({
+    generatedSessions: session._id,
+    status: 'active'
+  });
+
+  const normalBookings = await Booking.countDocuments({
+    sessionId: session._id,
+    status: { $ne: 'cancelled' }
+  });
+
+  const totalOccupancy = session.classType === 'Class' ? normalBookings : memberships;
+
+  const sent = await sendTrainerSessionReminderEmail(session, session.classId, session.trainerId, totalOccupancy);
+
+  if (sent) {
+    session.trainerReminderSent = true;
+    await session.save();
+    res.json({ message: 'Trainer reminder sent successfully' });
+  } else {
+    res.status(500);
+    throw new Error('Failed to send trainer reminder email');
+  }
 });

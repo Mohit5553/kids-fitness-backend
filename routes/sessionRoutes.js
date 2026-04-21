@@ -7,7 +7,8 @@ import {
   deleteSession,
   getSessionQr,
   bulkCreateSessions,
-  updateTrainerStatus
+  updateTrainerStatus,
+  sendTrainerReminder
 } from '../controllers/sessionController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 
@@ -21,5 +22,6 @@ router.put('/:id/trainer-status', protect, updateTrainerStatus);
 router.delete('/:id', protect, deleteSession);
 router.post('/bulk', protect, adminOnly, bulkCreateSessions);
 router.get('/:id/qr', protect, adminOnly, getSessionQr);
+router.post('/:id/trainer-reminder', protect, adminOnly, sendTrainerReminder);
 
 export default router;

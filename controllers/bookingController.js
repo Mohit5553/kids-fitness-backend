@@ -653,9 +653,42 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
 });
 
 export const sendReminder = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id).populate('userId sessionId classId');
-  if (!booking) throw new Error('Booking not found');
+  const { sessionId } = req.query;
+  
+  // 1. Try to find as a regular booking first
+  const booking = await Booking.findById(req.params.id)
+    .populate('userId', 'name email firstName')
+    .populate('sessionId')
+    .populate('classId', 'title name');
+
+  if (!booking) {
+    // 2. Try to find as a membership (Virtual Booking)
+    const membership = await Membership.findById(req.params.id)
+      .populate('userId', 'name email firstName')
+      .populate('childId', 'name')
+      .populate('planId', 'name');
+
+    if (!membership) {
+      res.status(404);
+      throw new Error('Record not found');
+    }
+
+    if (!sessionId) {
+      res.status(400);
+      throw new Error('Session ID is required for membership reminders');
+    }
+
+    const session = await Session.findById(sessionId).populate('classId', 'title name');
+    if (!session) throw new Error('Session not found');
+
+    const sent = await sendSessionReminderEmail(membership, membership.planId || session.classId, session, membership.userId);
+    return res.json({ message: sent ? 'Reminder sent' : 'Failed to send' });
+  }
+
+  // Handle standard booking
   const classData = booking.classId || booking.sessionId?.classId;
-  const sent = await sendSessionReminderEmail(booking, classData, booking.sessionId, booking.userId || booking.guestDetails);
+  const sessionData = booking.sessionId;
+  // If sessionData was already populated, we use it directly
+  const sent = await sendSessionReminderEmail(booking, classData, sessionData, booking.userId || booking.guestDetails);
   res.json({ message: sent ? 'Reminder sent' : 'Failed to send' });
 });
