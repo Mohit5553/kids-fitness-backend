@@ -19,7 +19,8 @@ const sessionSchema = new mongoose.Schema(
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
     attendanceStatus: { type: String, enum: ['booked', 'present', 'absent'], default: 'booked' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
-    isManual: { type: Boolean, default: false }
+    isManual: { type: Boolean, default: false },
+    trainerReminderSent: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

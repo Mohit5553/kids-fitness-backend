@@ -390,10 +390,23 @@ export async function sendPasswordResetEmail(user, resetUrl) {
   });
 }
 
-export async function sendSessionReminderEmail(booking, classData, sessionData, userData) {
-  const isGuest = !booking.userId;
-  const name = isGuest ? booking.guestDetails.name : (userData.firstName || userData.name);
-  const email = isGuest ? booking.guestDetails.email : userData.email;
+export async function sendSessionReminderEmail(bookingOrMembership, classData, sessionData, userData) {
+  const isMembership = !bookingOrMembership.bookingNumber && bookingOrMembership.generatedSessions;
+  let name, email, participantName;
+
+  if (isMembership) {
+    name = userData.firstName || userData.name;
+    email = userData.email;
+    participantName = bookingOrMembership.childId?.name || name;
+  } else {
+    // It's a standard booking or guest booking
+    const isGuest = !bookingOrMembership.userId;
+    name = isGuest ? bookingOrMembership.guestDetails.name : (userData.firstName || userData.name);
+    email = isGuest ? bookingOrMembership.guestDetails.email : userData.email;
+    participantName = bookingOrMembership.participants?.[0]?.name || name;
+  }
+
+  const title = classData.title || classData.name || 'Your Session';
 
   const html = `
     <div style="${baseStyles}">
@@ -402,10 +415,10 @@ export async function sendSessionReminderEmail(booking, classData, sessionData, 
       </div>
       <div style="${contentStyles}">
         <p>Hi <strong>${name}</strong>,</p>
-        <p>This is a friendly reminder from <strong>Kids Fitness</strong> about your upcoming session!</p>
+        <p>This is a friendly reminder about the upcoming session for <strong>${participantName}</strong>!</p>
         
         <div style="background-color: #f8fbff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #29AAE2;">
-          <p style="margin: 0 0 10px 0;"><strong>Class:</strong> ${classData.title}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Session:</strong> ${title}</p>
           <p style="margin: 0 0 10px 0;"><strong>Date:</strong> ${new Date(sessionData.startTime).toLocaleDateString()}</p>
           <p style="margin: 0 0 10px 0;"><strong>Time:</strong> ${new Date(sessionData.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
           <p style="margin: 0;"><strong>Studio/Location:</strong> ${sessionData.location || 'Main Studio'}</p>
@@ -414,7 +427,7 @@ export async function sendSessionReminderEmail(booking, classData, sessionData, 
         <p>We're looking forward to seeing you! Please try to arrive at least 10 minutes before the class starts.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">View All Bookings</a>
+          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">View Dashboard</a>
         </div>
         
         <p>If you have any questions or need to reschedule, please contact us.</p>
@@ -427,7 +440,46 @@ export async function sendSessionReminderEmail(booking, classData, sessionData, 
 
   return sendEmail({
     to: email,
-    subject: `Reminder: Your session for ${classData.title} is coming up!`,
+    subject: `Reminder: Session for ${participantName} - ${title}`,
+    html
+  });
+}
+
+export async function sendTrainerSessionReminderEmail(session, classData, trainer, bookingsCount) {
+  const html = `
+    <div style="${baseStyles}">
+      <div style="${headerStyles}">
+        <h1 style="margin:0; font-size: 24px;">Trainer Session Reminder</h1>
+      </div>
+      <div style="${contentStyles}">
+        <p>Hi <strong>${trainer.name}</strong>,</p>
+        <p>This is a reminder for your upcoming session tomorrow!</p>
+        
+        <div style="background-color: #f8fbff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #29AAE2;">
+          <p style="margin: 0 0 10px 0;"><strong>Class/Plan:</strong> ${classData.title || classData.name}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Date:</strong> ${new Date(session.startTime).toLocaleDateString()}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Time:</strong> ${new Date(session.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${session.location || 'Main Studio'}</p>
+          <p style="margin: 0;"><strong>Participants Booked:</strong> ${bookingsCount}</p>
+        </div>
+
+        <p>Please ensure you are prepared for the session and arrive at least 15 minutes early.</p>
+        
+        <div style="text-align: center;">
+          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/trainer/dashboard" style="${buttonStyles}">View Trainer Dashboard</a>
+        </div>
+        
+        <p>If you have any issues or cannot attend, please contact management immediately.</p>
+      </div>
+      <div style="${footerStyles}">
+        &copy; ${new Date().getFullYear()} Kids Fitness. All rights reserved.
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    to: trainer.email,
+    subject: `Trainer Reminder: ${classData.title || classData.name} session tomorrow`,
     html
   });
 }

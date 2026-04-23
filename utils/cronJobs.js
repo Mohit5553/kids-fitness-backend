@@ -1,6 +1,8 @@
 import cron from 'node-cron';
 import Booking from '../models/Booking.js';
-import { sendSessionReminderEmail } from './mailer.js';
+import Session from '../models/Session.js';
+import Membership from '../models/Membership.js';
+import { sendSessionReminderEmail, sendTrainerSessionReminderEmail } from './mailer.js';
 
 export const initCronJobs = () => {
     // Run every hour at the top of the hour
@@ -12,8 +14,9 @@ export const initCronJobs = () => {
             const tomorrowStart = new Date(now.getTime() + 23 * 60 * 60 * 1000); // 23 hours from now
             const tomorrowEnd = new Date(now.getTime() + 25 * 60 * 60 * 1000);   // 25 hours from now
 
+            // 1. CUSTOMER REMINDERS (Based on Bookings)
             // Find confirmed bookings for sessions starting in ~24 hours that haven't been reminded
-            const pendingReminders = await Booking.find({
+            const pendingCustomerReminders = await Booking.find({
                 status: 'confirmed',
                 reminderSent: false,
                 date: { $gte: tomorrowStart, $lte: tomorrowEnd }
@@ -26,30 +29,98 @@ export const initCronJobs = () => {
                 populate: { path: 'classId', select: 'title' }
             });
 
-            console.log(`[Cron] Found ${pendingReminders.length} pending reminders.`);
+            console.log(`[Cron] Found ${pendingCustomerReminders.length} pending customer reminders.`);
 
-            for (const booking of pendingReminders) {
+            for (const booking of pendingCustomerReminders) {
                 try {
                     const classData = booking.classId || booking.sessionId?.classId;
                     const sessionData = booking.sessionId;
                     const userData = booking.userId || booking.guestDetails;
 
                     if (!classData || !sessionData || !userData || (!userData.email && !booking.guestDetails?.email)) {
-                        console.warn(`[Cron] Skipping booking ${booking._id}: Missing data or contact info.`);
                         continue;
                     }
 
                     const sent = await sendSessionReminderEmail(booking, classData, sessionData, userData);
-                    
                     if (sent) {
                         booking.reminderSent = true;
                         await booking.save();
-                        console.log(`[Cron] Reminder sent for booking ${booking.bookingNumber} to ${userData.email}`);
                     }
                 } catch (err) {
-                    console.error(`[Cron] Failed to process reminder for booking ${booking._id}:`, err.message);
+                    console.error(`[Cron] Failed customer reminder for booking ${booking._id}:`, err.message);
                 }
             }
+
+            // 2. TRAINER REMINDERS (Based on Sessions)
+            // Find scheduled sessions starting in ~24 hours that haven't sent trainer reminders
+            const pendingTrainerReminders = await Session.find({
+                status: 'scheduled',
+                trainerReminderSent: false,
+                startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
+                trainerId: { $ne: null }
+            })
+            .populate('trainerId', 'name email')
+            .populate('classId', 'title name'); // title for Class, name for Plan
+
+            console.log(`[Cron] Found ${pendingTrainerReminders.length} pending trainer reminders.`);
+
+            for (const session of pendingTrainerReminders) {
+                try {
+                    if (!session.trainerId || !session.trainerId.email) {
+                        continue;
+                    }
+
+                    // Count confirmed bookings for this session
+                    const bookingsCount = await Booking.countDocuments({
+                        sessionId: session._id,
+                        status: 'confirmed'
+                    });
+
+                    const sent = await sendTrainerSessionReminderEmail(session, session.classId, session.trainerId, bookingsCount);
+                    if (sent) {
+                        session.trainerReminderSent = true;
+                        await session.save();
+                        console.log(`[Cron] Trainer reminder sent for session ${session._id} to ${session.trainerId.email}`);
+                    }
+                } catch (err) {
+                    console.error(`[Cron] Failed trainer reminder for session ${session._id}:`, err.message);
+                }
+            }
+
+            // 3. MEMBERSHIP CUSTOMER REMINDERS (For fixed-schedule plans)
+            // Find all sessions starting in the window
+            const upcomingSessions = await Session.find({
+                startTime: { $gte: tomorrowStart, $lte: tomorrowEnd },
+                status: 'scheduled'
+            }).populate('classId', 'title name');
+
+            for (const session of upcomingSessions) {
+                // Find active memberships that include this session and haven't been reminded yet
+                const pendingMemberships = await Membership.find({
+                    status: 'active',
+                    generatedSessions: session._id,
+                    remindedSessions: { $ne: session._id }
+                }).populate('userId', 'name email firstName')
+                  .populate('childId', 'name')
+                  .populate('planId', 'name');
+
+                for (const membership of pendingMemberships) {
+                    try {
+                        if (!membership.userId || !membership.userId.email) continue;
+                        
+                        const classData = membership.planId || session.classId;
+                        const sent = await sendSessionReminderEmail(membership, classData, session, membership.userId);
+                        
+                        if (sent) {
+                            membership.remindedSessions.push(session._id);
+                            await membership.save();
+                        }
+                    } catch (err) {
+                        console.error(`[Cron] Failed membership reminder for membership ${membership._id}:`, err.message);
+                    }
+                }
+            }
+
         } catch (err) {
             console.error('[Cron] Error in reminder job:', err.message);
         }
