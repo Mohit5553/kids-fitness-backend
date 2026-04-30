@@ -244,11 +244,27 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
 export const getAllMemberships = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
+  
   const memberships = await Membership.find(filter)
     .populate('userId', 'name email')
     .populate('planId', 'name price validity type classesIncluded durationWeeks billingCycle')
+    .populate('childId', 'name')
     .sort({ createdAt: -1 });
-  res.json(memberships);
+
+  // Enrich with attendance counts
+  const enriched = await Promise.all(memberships.map(async (m) => {
+    const attendanceCount = await Attendance.countDocuments({
+      membershipId: m._id,
+      status: { $in: ['present', 'late'] }
+    });
+    
+    return {
+      ...m.toObject(),
+      sessionsUsed: attendanceCount
+    };
+  }));
+
+  res.json(enriched);
 });
 
 export const createMembership = asyncHandler(async (req, res) => {
@@ -376,6 +392,57 @@ export const createMembership = asyncHandler(async (req, res) => {
 
   const isStaff = req.user && !['parent', 'customer'].includes((req.user.role || '').toLowerCase());
   const targetUserId = (isStaff && req.body.userId) ? req.body.userId : req.user._id;
+
+  // --- CONFLICT DETECTION ---
+  // 1. Same Plan Conflict: Check if student already has an active/frozen membership for this specific plan.
+  const existingSamePlan = await Membership.findOne({
+    userId: targetUserId,
+    childId: childId || null,
+    planId: planId,
+    status: { $in: ['active', 'frozen'] },
+    $or: [
+        { endDate: { $gte: startDate } },
+        { endDate: null } // Unlimited validity
+    ]
+  }).populate('planId', 'name');
+
+  if (existingSamePlan) {
+    res.status(400);
+    throw new Error(`Conflict: This student already has an active membership for "${existingSamePlan.planId.name}" until ${existingSamePlan.endDate ? new Date(existingSamePlan.endDate).toLocaleDateString() : 'indefinitely'}.`);
+  }
+
+  // 2. Overlapping Schedule Conflict: Check for same time slots in any active membership for this student.
+  if (preferredDays?.length > 0 && preferredSlots?.length > 0) {
+    // Basic day normalization for robust comparison (handles "Mon" vs "Monday")
+    const dayNormalizer = {
+        'sun': 'sun', 'mon': 'mon', 'tue': 'tue', 'wed': 'wed', 'thu': 'thu', 'fri': 'fri', 'sat': 'sat',
+        'sunday': 'sun', 'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed', 'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat'
+    };
+    const inputNormalizedDays = preferredDays.map(d => dayNormalizer[d.toLowerCase().trim()]).filter(Boolean);
+
+    const overlappingMemberships = await Membership.find({
+      userId: targetUserId,
+      childId: childId || null,
+      status: { $in: ['active', 'frozen'] },
+      $or: [
+        { startDate: { $lte: finalEndDate }, endDate: { $gte: startDate } },
+        { endDate: null, startDate: { $lte: finalEndDate } }
+      ]
+    }).populate('planId', 'name');
+
+    for (const m of overlappingMemberships) {
+        const mNormalizedDays = (m.preferredDays || []).map(d => dayNormalizer[d.toLowerCase().trim()]).filter(Boolean);
+        const hasDayOverlap = inputNormalizedDays.some(d => mNormalizedDays.includes(d));
+        
+        if (hasDayOverlap) {
+            const hasSlotOverlap = preferredSlots.some(s => (m.preferredSlots || []).includes(s));
+            if (hasSlotOverlap) {
+                res.status(400);
+                throw new Error(`Conflict: This student already has an active membership ("${m.planId.name}") booked for the same day and time slots.`);
+            }
+        }
+    }
+  }
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -660,6 +727,37 @@ export const createMembership = asyncHandler(async (req, res) => {
   }
 });
 
+export const updateMembershipTrainer = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { trainerId } = req.body;
+
+  const membership = await Membership.findById(id);
+  if (!membership) {
+    res.status(404);
+    throw new Error('Membership not found');
+  }
+
+  membership.trainerId = trainerId;
+  await membership.save();
+
+  // Update all UPCOMING sessions generated for this membership
+  if (membership.generatedSessions && membership.generatedSessions.length > 0) {
+    const Session = mongoose.model('Session');
+    const upcomingSessions = await Session.find({
+      _id: { $in: membership.generatedSessions },
+      startTime: { $gte: new Date() }
+    });
+
+    for (const session of upcomingSessions) {
+      session.trainerId = trainerId || null;
+      if (trainerId) session.trainerStatus = 'accepted'; 
+      await session.save();
+    }
+  }
+
+  res.json({ message: 'Trainer updated for membership and all upcoming sessions', trainerId });
+});
+
 export const updateMembership = asyncHandler(async (req, res) => {
   const membership = await Membership.findById(req.params.id);
   if (!membership) {
@@ -704,7 +802,32 @@ export const getMembershipByBookingId = asyncHandler(async (req, res) => {
     throw new Error('Access denied to this membership');
   }
 
-  res.json(membership);
+  // Enrich generatedSessions with attendance status
+  const atts = await Attendance.find({ membershipId: membership._id }).lean();
+  
+  const mObj = membership.toObject();
+  if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
+    mObj.generatedSessions = mObj.generatedSessions.map(session => {
+        const att = atts.find(a => 
+            a.sessionId?.toString() === (session._id || session).toString()
+        );
+        
+        let displayStatus = 'scheduled';
+        if (att) {
+          displayStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
+        } else if (new Date(session.startTime) < new Date()) {
+          // If in the past and no attendance record, likely absent
+          displayStatus = 'not checked';
+        }
+
+        return {
+            ...session,
+            status: displayStatus 
+        };
+    });
+  }
+
+  res.json(mObj);
 });
 
 // @desc    Toggle Membership Freeze

@@ -35,10 +35,10 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 
 export const getAllBookings = asyncHandler(async (req, res) => {
   const { sessionId, trainerId, userId, childId, corporateName, groupId } = req.query;
-  
+
   const isDirectLookup = sessionId || trainerId || userId || childId;
   const filter = {};
-  
+
   if (userId) filter.userId = userId;
   if (childId) filter['participants.childId'] = childId;
 
@@ -75,68 +75,66 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   }
 
   if (sessionId) {
-      const targetSession = await Session.findById(sessionId);
-      if (targetSession) {
-          if (targetSession.classType === 'Class') {
-              // We previously filtered out packages/memberships here, but now we allow all participants to be shown.
-          } else {
-              // If session is a 'Plan', only show membership-based students
-              const relevantMemberships = await Membership.find({ 
-                  generatedSessions: sessionId,
-                  status: 'active'
-              })
-              .populate('userId', 'name email phone')
-              .populate('childId')
-              .populate('planId', 'name');
+    const targetSession = await Session.findById(sessionId);
+    if (targetSession) {
+      // Look for ALL memberships linked to this session, regardless of session type
+      const relevantMemberships = await Membership.find({
+        generatedSessions: sessionId
+      })
+        .populate('userId', 'name email phone')
+        .populate('childId')
+        .populate('planId', 'name')
+        .populate('bookingId', 'bookingNumber status');
 
-              const attendances = await Attendance.find({ sessionId });
-              const attendedMemberIds = attendances.map(a => a.membershipId?.toString()).filter(Boolean);
+      const attendances = await Attendance.find({ sessionId });
+      const attendedMemberIds = attendances.map(a => a.membershipId?.toString()).filter(Boolean);
 
-              // Include all existing bookings for the Plan session.
+      relevantMemberships.forEach(membership => {
+        const alreadyExists = filtered.some(b =>
+          (b.membershipId && b.membershipId.toString() === membership._id.toString()) ||
+          (b._id === `MR-${membership._id}-${sessionId}`)
+        );
 
-              relevantMemberships.forEach(membership => {
-                  const alreadyExists = filtered.some(b => 
-                    (b.membershipId && b.membershipId.toString() === membership._id.toString()) ||
-                    (b._id === `MR-${membership._id}-${sessionId}`)
-                  );
+        if (!alreadyExists) {
+          const isAttended = attendedMemberIds.includes(membership._id.toString());
 
-                  if (!alreadyExists) {
-                      const isAttended = attendedMemberIds.includes(membership._id.toString());
-                      
-                      const virtualBooking = {
-                          _id: `MR-${membership._id}-${sessionId}`,
-                          bookingNumber: `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
-                          bookingType: 'package',
-                          userId: membership.userId,
-                          participants: membership.childId ? [{
-                              name: membership.childId.name,
-                              age: membership.childId.age,
-                              gender: membership.childId.gender,
-                              relation: 'Child',
-                              childId: membership.childId._id
-                          }] : [{
-                              name: membership.userId?.name || 'Account Holder',
-                              age: 18,
-                              relation: 'Self'
-                          }],
-                           status: isAttended ? 'attended' : 'confirmed',
-                           paymentStatus: 'completed',
-                           createdAt: membership.createdAt,
-                           locationId: membership.locationId,
-                           membershipId: membership._id,
-                           planId: membership.planId,
-                           isVirtualMembership: true,
-                           packageInfo: {
-                               name: membership.planId?.name,
-                               childName: membership.childId?.name,
-                               parentName: membership.userId?.name
-                           }
-                       };
-                       filtered.unshift(virtualBooking);
-                  }
-              });
-          }
-      }
+          // Use the linked booking status (Pending/Confirmed/etc.)
+          // Default to 'confirmed' if no booking found (fallback)
+          const bookingStatus = isAttended ? 'attended' : (membership.bookingId?.status || 'confirmed');
+
+          const virtualBooking = {
+            _id: `MR-${membership._id}-${sessionId}`,
+            bookingNumber: membership.bookingId?.bookingNumber || `MBR-${membership._id.toString().slice(-6).toUpperCase()}`,
+            bookingType: 'package',
+            userId: membership.userId,
+            participants: membership.childId ? [{
+              name: membership.childId.name,
+              age: membership.childId.age,
+              gender: membership.childId.gender,
+              relation: 'Child',
+              childId: membership.childId._id
+            }] : [{
+              name: membership.userId?.name || 'Account Holder',
+              age: 18,
+              relation: 'Self'
+            }],
+            status: bookingStatus,
+            paymentStatus: membership.bookingId?.status === 'confirmed' ? 'completed' : 'pending',
+            createdAt: membership.createdAt,
+            locationId: membership.locationId,
+            membershipId: membership._id,
+            planId: membership.planId,
+            isVirtualMembership: true,
+            packageInfo: {
+              name: membership.planId?.name,
+              childName: membership.childId?.name,
+              parentName: membership.userId?.name
+            }
+          };
+          filtered.unshift(virtualBooking);
+        }
+      });
+    }
   }
 
   // For package bookings in the main list, attach their membership info
@@ -144,7 +142,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   if (packageBookings.length > 0) {
     const bookingIds = packageBookings.map(b => b._id);
     const memberships = await Membership.find({ bookingId: { $in: bookingIds } });
-    
+
     // Map and return, ensuring all items are preserved
     filtered = filtered.map(b => {
       if (b.bookingType === 'package' && !b.isVirtualMembership) {
@@ -165,10 +163,10 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   filtered = filtered.map(b => {
     const bookingDate = b.date || b.sessionId?.startTime;
     if (b.status === 'attended' && bookingDate && new Date(bookingDate) < now) {
-       // If it's a plain search result, it might be a Mongoose object, so convert it
-       const plain = b.toObject ? b.toObject() : { ...b };
-       plain.status = 'completed';
-       return plain;
+      // If it's a plain search result, it might be a Mongoose object, so convert it
+      const plain = b.toObject ? b.toObject() : { ...b };
+      plain.status = 'completed';
+      return plain;
     }
     return b;
   });
@@ -212,17 +210,17 @@ export const createBooking = asyncHandler(async (req, res) => {
 
     const bookingUserRole = (req.user?.role || '').toLowerCase().replace(/[\s_-]/g, '');
     const isStaffBooking = ['admin', 'manager', 'cashier'].some(r => bookingUserRole.includes(r));
-    
+
     const liveBookedCount = await mongoose.model('Booking').countDocuments({
       sessionId: session._id,
       status: { $ne: 'cancelled' }
     });
-    
+
     const remainingCapacity = session.capacity - liveBookedCount;
     if (participants.length > remainingCapacity && !isStaffBooking) {
       res.status(400);
-      const msg = remainingCapacity <= 0 
-        ? 'This session is full' 
+      const msg = remainingCapacity <= 0
+        ? 'This session is full'
         : `Only ${remainingCapacity} spot${remainingCapacity > 1 ? 's' : ''} remaining in this session`;
       throw new Error(msg);
     }
@@ -233,32 +231,58 @@ export const createBooking = asyncHandler(async (req, res) => {
         userId: targetUserIdForLimit,
         status: 'active',
         $or: [
-           { childId: { $in: participants.map(p => p.childId).filter(Boolean) } },
-           { childId: null }
+          { childId: { $in: participants.map(p => p.childId).filter(Boolean) } },
+          { childId: null }
         ]
       }).populate('planId');
 
       if (activeMembership && activeMembership.planId?.dailyBookingLimit > 0) {
-         const startOfDay = new Date(resolvedDate);
-         startOfDay.setHours(0, 0, 0, 0);
-         const endOfDay = new Date(resolvedDate);
-         endOfDay.setHours(23, 59, 59, 999);
+        const startOfDay = new Date(resolvedDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(resolvedDate);
+        endOfDay.setHours(23, 59, 59, 999);
 
-         const dailyCounts = await Booking.countDocuments({
-            userId: targetUserIdForLimit,
-            date: { $gte: startOfDay, $lte: endOfDay },
-            status: { $ne: 'cancelled' }
-         });
+        const dailyCounts = await Booking.countDocuments({
+          userId: targetUserIdForLimit,
+          date: { $gte: startOfDay, $lte: endOfDay },
+          status: { $ne: 'cancelled' }
+        });
 
-         if (dailyCounts + participants.length > activeMembership.planId.dailyBookingLimit) {
-            res.status(400);
-            throw new Error(`Daily booking limit reached (${activeMembership.planId.dailyBookingLimit} sessions/day). You have already booked ${dailyCounts} session(s) for this day.`);
-         }
+        if (dailyCounts + participants.length > activeMembership.planId.dailyBookingLimit) {
+          res.status(400);
+          throw new Error(`Daily booking limit reached (${activeMembership.planId.dailyBookingLimit} sessions/day). You have already booked ${dailyCounts} session(s) for this day.`);
+        }
       }
 
-      if (activeMembership && activeMembership.status === 'frozen') {
-         res.status(400);
-         throw new Error('Your membership is currently frozen. Please unfreeze it to book classes.');
+    }
+
+    if (activeMembership && activeMembership.status === 'frozen') {
+      res.status(400);
+      throw new Error('Your membership is currently frozen. Please unfreeze it to book classes.');
+    }
+
+    // DUPLICATE BOOKING CHECK
+    const targetChildIds = participants.map(p => p.childId).filter(Boolean);
+    const hasSelfBooking = participants.some(p => p.relation === 'Self');
+
+    const duplicateFilter = {
+      sessionId: resolvedSessionId,
+      status: { $ne: 'cancelled' },
+      $or: []
+    };
+
+    if (targetChildIds.length > 0) {
+      duplicateFilter.$or.push({ 'participants.childId': { $in: targetChildIds } });
+    }
+    if (hasSelfBooking) {
+      duplicateFilter.$or.push({ userId: targetUserIdForLimit, 'participants.relation': 'Self' });
+    }
+
+    if (duplicateFilter.$or.length > 0) {
+      const existingBooking = await Booking.findOne(duplicateFilter);
+      if (existingBooking) {
+        res.status(400);
+        throw new Error('One or more participants are already booked for this session.');
       }
     }
   }
@@ -274,14 +298,14 @@ export const createBooking = asyncHandler(async (req, res) => {
   const couponAmount = Number(req.body.couponAmount) || 0;
   const rawBaseAmount = (classItem.price || 0) * participants.length;
   const netBaseAmount = Math.max(0, rawBaseAmount - discountAmount - couponAmount);
-  
+
   let taxAmount = 0;
   let activeTax = null;
   if (classItem.taxId) {
     activeTax = await Tax.findById(classItem.taxId);
   } else if (resolvedLocationId) {
-    activeTax = await Tax.findOne({ 
-      locationId: resolvedLocationId, 
+    activeTax = await Tax.findOne({
+      locationId: resolvedLocationId,
       status: 'active',
       $or: [{ validityEnd: { $exists: false } }, { validityEnd: { $gte: new Date() } }]
     });
@@ -425,15 +449,15 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     startOfToday.setHours(0, 0, 0, 0);
 
     if (existingAttendance && (existingAttendance.status === 'present' || existingAttendance.status === 'completed')) {
-        res.status(400);
-        throw new Error('Attendance has already been marked as complete and cannot be changed.');
+      res.status(400);
+      throw new Error('Attendance has already been marked as complete and cannot be changed.');
     }
-    
+
     // LOCK LOGIC FOR MEMBERSHIP SESSIONS (Virtual Bookings)
     // For single check-ins, we lock if the session date has passed.
     if (session && new Date(session.startTime) < startOfToday) {
-        res.status(400);
-        throw new Error('This session has already passed and its attendance cannot be changed.');
+      res.status(400);
+      throw new Error('This session has already passed and its attendance cannot be changed.');
     }
 
     const creditCost = session?.classId?.creditCost || 1;
@@ -447,7 +471,16 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     // Auto-switch 'attended' to 'completed' for memberships
     const targetStatus = status === 'attended' ? 'completed' : status;
 
-    await Attendance.findOneAndUpdate(filter, { ...filter, participantName: membership.childId?.name || membership.userId?.name, locationId: membership.locationId, status: (targetStatus === 'attended' || targetStatus === 'completed') ? 'present' : 'absent', method: 'manual', checkedInAt: new Date() }, { upsert: true, new: true });
+    await Attendance.findOneAndUpdate(filter, { 
+      ...filter, 
+      userId: membership.userId?._id || membership.userId,
+      bookingId: membership.bookingId?._id || membership.bookingId,
+      participantName: membership.childId?.name || membership.userId?.name, 
+      locationId: membership.locationId, 
+      status: (targetStatus === 'attended' || targetStatus === 'completed') ? 'present' : 'absent', 
+      method: 'manual', 
+      checkedInAt: new Date() 
+    }, { upsert: true, new: true });
     return res.json({ message: 'Attendance recorded', classesRemaining: membership.classesRemaining, creditsRemaining: membership.creditsRemaining });
   }
 
@@ -455,8 +488,8 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
   if (!booking) throw new Error('Booking not found');
 
   if (booking.status === 'completed') {
-      res.status(400);
-      throw new Error('This booking is already completed and cannot be changed.');
+    res.status(400);
+    throw new Error('This booking is already completed and cannot be changed.');
   }
 
   const startOfToday = new Date();
@@ -464,36 +497,49 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
   // LOCK LOGIC - DIFFERENTIATE SESSION VS PACKAGE
   if (booking.bookingType === 'session') {
-      // For single sessions, lock if the date has passed
-      if (new Date(booking.date) < startOfToday) {
-          res.status(400);
-          throw new Error('The date for this session has passed and its status cannot be changed.');
-      }
+    // For single sessions, lock if the date has passed
+    if (new Date(booking.date) < startOfToday) {
+      res.status(400);
+      throw new Error('The date for this session has passed and its status cannot be changed.');
+    }
   } else if (booking.bookingType === 'package') {
-      // For memberships, lock ONLY if the schedule is actually complete
-      const mbr = await mongoose.model('Membership').findOne({ bookingId: booking._id });
-      if (mbr) {
-          const isExpired = mbr.endDate && new Date(mbr.endDate) < startOfToday;
-          const isUsedUp = mbr.classesRemaining === 0;
-          if (isExpired || isUsedUp) {
-              res.status(400);
-              const reason = isExpired ? 'This membership has expired' : 'This membership has no classes remaining';
-              throw new Error(`${reason} and its status cannot be changed.`);
-          }
+    // For memberships, lock ONLY if the schedule is actually complete
+    const mbr = await mongoose.model('Membership').findOne({ bookingId: booking._id });
+    if (mbr) {
+      const isExpired = mbr.endDate && new Date(mbr.endDate) < startOfToday;
+      const isUsedUp = mbr.classesRemaining === 0;
+      if (isExpired || isUsedUp) {
+        res.status(400);
+        const reason = isExpired ? 'This membership has expired' : 'This membership has no classes remaining';
+        throw new Error(`${reason} and its status cannot be changed.`);
       }
+    }
   }
 
-  if (status === 'cancelled' && booking.status !== 'cancelled' && booking.sessionId) {
-    const session = await Session.findById(booking.sessionId);
-    if (session && session.bookedParticipants > 0) {
-      session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
-      await session.save();
+  if (status === 'cancelled' && booking.status !== 'cancelled') {
+    if (booking.sessionId) {
+      const session = await Session.findById(booking.sessionId);
+      if (session && session.bookedParticipants > 0) {
+        session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
+        await session.save();
+      }
+    } else if (booking.bookingType === 'package') {
+      // Handle membership session occupancy decrement
+      const memberships = await mongoose.model('Membership').find({ bookingId: booking._id });
+      for (const m of memberships) {
+        if (m.generatedSessions && m.generatedSessions.length > 0) {
+          await Session.updateMany(
+            { _id: { $in: m.generatedSessions }, startTime: { $gte: new Date() }, bookedParticipants: { $gt: 0 } },
+            { $inc: { bookedParticipants: -1 } }
+          );
+        }
+      }
     }
   }
 
   if (status === 'pending' && booking.status !== 'pending') {
-      res.status(400);
-      throw new Error('Cannot change status back to pending once it has been confirmed or processed.');
+    res.status(400);
+    throw new Error('Cannot change status back to pending once it has been confirmed or processed.');
   }
 
   const finalStatus = status === 'attended' ? 'completed' : status;
@@ -564,11 +610,24 @@ export const deleteBooking = asyncHandler(async (req, res) => {
   if (!isAdmin && booking.userId.toString() !== req.user._id.toString()) throw new Error('Not allowed');
 
   // Decrement occupancy if it was a Confirmed session booking
-  if (booking.status !== 'cancelled' && booking.sessionId) {
-    const session = await Session.findById(booking.sessionId);
-    if (session && session.bookedParticipants > 0) {
-      session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
-      await session.save();
+  if (booking.status !== 'cancelled') {
+    if (booking.sessionId) {
+      const session = await Session.findById(booking.sessionId);
+      if (session && session.bookedParticipants > 0) {
+        session.bookedParticipants = Math.max(0, session.bookedParticipants - (booking.participants?.length || 1));
+        await session.save();
+      }
+    } else if (booking.bookingType === 'package') {
+      // Handle membership session occupancy decrement
+      const memberships = await Membership.find({ bookingId: booking._id });
+      for (const m of memberships) {
+        if (m.generatedSessions && m.generatedSessions.length > 0) {
+          await Session.updateMany(
+            { _id: { $in: m.generatedSessions }, startTime: { $gte: new Date() }, bookedParticipants: { $gt: 0 } },
+            { $inc: { bookedParticipants: -1 } }
+          );
+        }
+      }
     }
   }
 
@@ -654,7 +713,7 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
 
 export const sendReminder = asyncHandler(async (req, res) => {
   const { sessionId } = req.query;
-  
+
   // 1. Try to find as a regular booking first
   const booking = await Booking.findById(req.params.id)
     .populate('userId', 'name email firstName')

@@ -76,10 +76,10 @@ export const getParentSummary = asyncHandler(async (req, res) => {
 
   const [childrenCount, upcomingClassesCount, latestMembership] = await Promise.all([
     Child.countDocuments({ parentId: userId }),
-    Booking.countDocuments({ 
-      userId, 
-      status: 'confirmed', 
-      date: { $gte: now } 
+    Booking.countDocuments({
+      userId,
+      status: 'confirmed',
+      date: { $gte: now }
     }),
     Membership.findOne({ userId }).sort({ createdAt: -1 })
   ]);
@@ -97,7 +97,7 @@ export const getParentSummary = asyncHandler(async (req, res) => {
 export const getDetailedReport = asyncHandler(async (req, res) => {
   const { type } = req.params;
   const { startDate, endDate, locationId: queryLocationId, all } = req.query;
-  
+
   const filter = {};
   // If 'all' is true, we don't apply location filter. 
   // If queryLocationId is provided, we use it.
@@ -106,7 +106,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
     const locationId = queryLocationId || resolveReadLocationId(req);
     if (locationId) filter.locationId = locationId;
   }
-  
+
   const dateFilter = {};
   const sDate = startDate ? new Date(startDate) : null;
   const eDate = endDate ? new Date(endDate) : null;
@@ -175,20 +175,22 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           .populate('processedBy', 'name')
           .sort({ date: -1 })
           .lean(),
-        Attendance.find({ 
-          ...filter, 
-          ...attendanceDateFilter, 
-          membershipId: { $exists: true } 
+        Attendance.find({
+          ...filter,
+          ...attendanceDateFilter,
+          membershipId: { $exists: true }
         })
-        .populate({ path: 'sessionId', populate: [
-          { path: 'trainerId', select: 'name' },
-          { path: 'classId', select: 'title' }
-        ] })
-        .populate('userId', 'name email phone')
-        .populate('childId', 'name')
-        .populate('membershipId', 'bookingNumber')
-        .populate('locationId', 'name')
-        .lean()
+          .populate({
+            path: 'sessionId', populate: [
+              { path: 'trainerId', select: 'name' },
+              { path: 'classId', select: 'title' }
+            ]
+          })
+          .populate('userId', 'name email phone')
+          .populate('childId', 'name')
+          .populate('membershipId', 'bookingNumber')
+          .populate('locationId', 'name')
+          .lean()
       ]);
 
       // Enrich Purchases
@@ -266,7 +268,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         const bookings = await Booking.find({ sessionId: s._id, status: 'confirmed' });
         const totalSales = bookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
         const bookingCount = bookings.reduce((sum, b) => sum + (b.participants?.length || 1), 0);
-        
+
         return {
           ...s,
           classTitle: s.classId?.title || 'N/A',
@@ -308,7 +310,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .populate('processedBy', 'name')
         .sort({ createdAt: -1 })
         .lean();
-        
+
       data = paymentsWithPromos.map(p => ({
         ...p,
         promoName: p.promotionId?.name || 'Unknown',
@@ -347,6 +349,41 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         date: b.createdAt
       }));
       break;
+
+    case 'membership_consumption': {
+      const memberships = await Membership.find(filter)
+        .populate('userId', 'name email phone')
+        .populate('planId', 'name classesIncluded')
+        .populate('childId', 'name')
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      data = await Promise.all(memberships.map(async (m) => {
+        const attendanceCount = await Attendance.countDocuments({
+          membershipId: m._id,
+          status: { $in: ['present', 'late'] }
+        });
+
+        const total = m.planId?.classesIncluded || 0;
+        const remaining = m.classesRemaining === -1 ? 'Unlimited' : m.classesRemaining;
+        const used = attendanceCount;
+
+        return {
+          ...m,
+          parentName: m.userId?.name || 'Unknown',
+          childName: m.childId?.name || 'Unknown',
+          planName: m.planId?.name || 'N/A',
+          locationName: m.locationId?.name || 'N/A',
+          totalSessions: total === 0 ? 'Unlimited' : total,
+          sessionsUsed: used,
+          sessionsRemaining: remaining,
+          consumptionPercentage: total > 0 ? Math.round((used / total) * 100) : (m.classesRemaining === -1 ? 100 : 0),
+          expiryDate: m.endDate
+        };
+      }));
+      break;
+    }
 
     default:
       res.status(400);

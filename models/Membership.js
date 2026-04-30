@@ -29,7 +29,8 @@ const membershipSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     membershipUnits: { type: Number, default: 1 },
     previousEndDate: { type: Date }, // Stores the old end date when extended
-    remindedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }]
+    remindedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }],
+    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }
 );
