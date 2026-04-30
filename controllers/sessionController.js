@@ -170,25 +170,6 @@ export const getSessions = asyncHandler(async (req, res) => {
         await session.save().catch(err => console.error(`[SessionHealer] Failed to fix manual flag for ${session._id}:`, err.message));
       }
 
-      // Robust fallback: if trainer is TBA but session is from a membership with a fixed trainer
-      if (!sessionObj.trainerId && (session.membershipId || memberships.length > 0)) {
-        const Membership = mongoose.model('Membership');
-        const Plan = mongoose.model('Plan');
-
-        // Try to find any associated membership that might have a fixed trainer plan
-        const mId = session.membershipId || (memberships.length > 0 ? memberships[0]._id : null);
-        if (mId) {
-          const m = await Membership.findById(mId);
-          if (m) {
-            const p = await Plan.findById(m.planId).populate('trainerId', 'name');
-            if (p && p.trainerId && p.trainerAllocation === 'fixed') {
-              sessionObj.trainerId = p.trainerId;
-              sessionObj.trainerStatus = 'accepted';
-            }
-          }
-        }
-      }
-
       return sessionObj;
     })
   )).filter(Boolean);

@@ -1,6 +1,8 @@
 import asyncHandler from 'express-async-handler';
 import Plan from '../models/Plan.js';
 import Promotion from '../models/Promotion.js';
+import Session from '../models/Session.js';
+import Membership from '../models/Membership.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const getPlans = asyncHandler(async (req, res) => {
@@ -108,6 +110,7 @@ export const updatePlan = asyncHandler(async (req, res) => {
     throw new Error('Not allowed');
   }
 
+  const oldTrainerId = plan.trainerId?.toString();
   const updates = { ...req.body };
   if (updates.locationId === 'all') updates.locationId = null;
 
@@ -124,8 +127,35 @@ export const updatePlan = asyncHandler(async (req, res) => {
   if (updates.trainerId === '') updates.trainerId = null;
   if (updates.trainerAllocation === 'random') updates.trainerId = null;
 
+  const trainerChanged = updates.trainerId && updates.trainerId.toString() !== oldTrainerId;
+
   Object.assign(plan, updates);
   const saved = await plan.save();
+
+  // If trainer was updated, sync to memberships and upcoming sessions
+  if (trainerChanged && updates.trainerAllocation === 'fixed') {
+    console.log(`[Plan Sync] Propagating trainer change for plan ${plan.name} to all active records...`);
+    
+    // 1. Update active memberships
+    await Membership.updateMany(
+      { planId: plan._id, status: 'active' },
+      { trainerId: updates.trainerId }
+    );
+
+    // 2. Update upcoming sessions
+    await Session.updateMany(
+      { 
+        classId: plan._id, 
+        classType: 'Plan',
+        startTime: { $gte: new Date() } 
+      },
+      { 
+        trainerId: updates.trainerId,
+        trainerStatus: 'accepted'
+      }
+    );
+  }
+
   res.json(saved);
 });
 

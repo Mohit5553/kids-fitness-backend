@@ -81,12 +81,10 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
             const effectiveLocationId = locationId || plan.locationId || membership.locationId;
 
             // DE-DUPLICATION LOGIC: Find any existing session at this time/location
-            // Priority:
-            // 1. Session linked to this specific Plan
-            // 2. Session linked to the parent Class (if plan.classId is set)
+            // Broadened to allow different plans to share the same physical slot,
+            // but restricted to ensure trainer compatibility.
             let targetSessionId;
             const sessionMatchQuery = {
-                classId: plan._id, // Group by Package/Plan
                 startTime: sessionDate,
                 status: 'scheduled',
                 $and: [
@@ -106,11 +104,24 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                 ]
             };
 
-            // Refined search: Look for ANY session at this exact slot
-            const existingSession = await Session.findOne(sessionMatchQuery).session(dbSession);
+            // If plan has a fixed trainer, we must find a session with that trainer or no trainer
+            if (plan.trainerAllocation === 'fixed' && plan.trainerId) {
+                sessionMatchQuery.$or = [
+                    { trainerId: plan.trainerId },
+                    { trainerId: null }
+                ];
+            }
+
+            // First try to find a session linked to this exact plan
+            const planSpecificSession = await Session.findOne({ ...sessionMatchQuery, classId: plan._id }).session(dbSession);
+            // If not found, look for ANY compatible plan/membership session at this slot
+            const existingSession = planSpecificSession || await Session.findOne(sessionMatchQuery).session(dbSession);
 
             if (existingSession) {
-                // Normalize legacy/old shared sessions so all future lookups hit the same record.
+                // Increment booked participants count
+                existingSession.bookedParticipants = (existingSession.bookedParticipants || 0) + 1;
+
+                // Normalize legacy/old shared sessions
                 const needsNormalization =
                   existingSession.classType !== 'Plan' ||
                   !existingSession.endTime ||
@@ -118,7 +129,10 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                   (plan.trainerAllocation === 'fixed' && plan.trainerId && !existingSession.trainerId);
 
                 if (needsNormalization) {
-                    existingSession.classType = 'Plan';
+                    if (existingSession.classType !== 'Plan' && !existingSession.membershipId) {
+                         // Only take over if it's not a specific membership session already
+                         existingSession.classType = 'Plan';
+                    }
                     if (!existingSession.endTime) {
                         existingSession.endTime = new Date(sessionDate.getTime() + 60 * 60 * 1000);
                     }
@@ -129,11 +143,11 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                         existingSession.trainerId = plan.trainerId;
                         existingSession.trainerStatus = 'accepted';
                     }
-                    await existingSession.save({ session: dbSession });
                 }
+                await existingSession.save({ session: dbSession });
                 targetSessionId = existingSession._id;
             } else {
-                // Create new shared session (no membershipId assigned directly to Session)
+                // Create new shared session
                 const sessionData = {
                     classId: plan._id,
                     classType: 'Plan',
@@ -141,6 +155,7 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                     startTime: sessionDate,
                     endTime: new Date(sessionDate.getTime() + 60 * 60 * 1000), // Default 1 hour
                     locationId: effectiveLocationId,
+                    bookedParticipants: 1, // Start with 1 for the first person
                     status: 'scheduled'
                 };
 

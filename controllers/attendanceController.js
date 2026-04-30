@@ -8,12 +8,12 @@ import { resolveReadLocationId } from '../utils/locationScope.js';
 export const getMyAttendance = asyncHandler(async (req, res) => {
   const attendance = await Attendance.find({ userId: req.user._id })
     .populate('childId', 'name age')
-    .populate({ 
-      path: 'sessionId', 
+    .populate({
+      path: 'sessionId',
       populate: [
         { path: 'classId', select: 'title' },
         { path: 'trainerId', select: 'name' }
-      ] 
+      ]
     })
     .sort({ createdAt: -1 });
   res.json(attendance);
@@ -25,12 +25,12 @@ export const getAllAttendance = asyncHandler(async (req, res) => {
   const attendance = await Attendance.find(filter)
     .populate('userId', 'name email')
     .populate('childId', 'name age')
-    .populate({ 
-      path: 'sessionId', 
+    .populate({
+      path: 'sessionId',
       populate: [
         { path: 'classId', select: 'title' },
         { path: 'trainerId', select: 'name' }
-      ] 
+      ]
     })
     .sort({ createdAt: -1 });
   res.json(attendance);
@@ -53,9 +53,7 @@ export const checkIn = asyncHandler(async (req, res) => {
     }
     resolvedSessionId = booking.sessionId;
     resolvedLocationId = booking.locationId;
-
-    // If we're looking for a specific child but no childId provided, 
-    // we assume the first participant or similar, but the frontend should provide the name.
+    if (booking.userId) resolvedUserId = booking.userId;
   }
 
   if (!resolvedSessionId || (!resolvedChildId && !resolvedName)) {
@@ -78,13 +76,15 @@ export const checkIn = asyncHandler(async (req, res) => {
     existing.status = status || existing.status;
     existing.method = method || existing.method;
     existing.checkedInAt = new Date();
+    existing.bookingId = bookingId || existing.bookingId;
+    existing.userId = resolvedUserId || existing.userId;
     const saved = await existing.save();
 
     // Sync session status
     if (status) {
       await Session.findByIdAndUpdate(resolvedSessionId, { attendanceStatus: status });
     }
-    
+
     return res.json(saved);
   }
 
@@ -129,7 +129,7 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
 
     // Sync session status
     if (status) {
-       await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status });
+      await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status });
     }
 
     return res.json(saved);
@@ -148,7 +148,7 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
 
   // Sync session status
   if (status || true) {
-     await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status || 'present' });
+    await Session.findByIdAndUpdate(payload.sessionId, { attendanceStatus: status || 'present' });
   }
 
   res.status(201).json(created);
