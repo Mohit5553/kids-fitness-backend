@@ -119,13 +119,22 @@ export const getSessions = asyncHandler(async (req, res) => {
       });
 
       // STRICT FILTERING: 
-      // Physical Classes (classType: 'Class') should only count normal bookings.
-      // Membership Sessions (classType: 'Plan') should only count membership students.
+      // Count both scheduled participants and actual attendees (for manual/walk-in cases)
+      const attendances = await mongoose.model('Attendance').find({ sessionId: session._id });
+      const attendeeMembershipIds = attendances.map(a => a.membershipId?.toString()).filter(Boolean);
+      const attendeeBookingIds = attendances.map(a => a.bookingId?.toString()).filter(Boolean);
+
       let totalOccupancy = 0;
       if (session.classType === 'Class') {
-        totalOccupancy = normalBookings;
+        // For classes, merge scheduled bookings and manual attendances
+        const scheduledBookingIds = await Booking.find({ sessionId: session._id, status: { $ne: 'cancelled' } }).distinct('_id');
+        const uniqueBookings = new Set([...scheduledBookingIds.map(id => id.toString()), ...attendeeBookingIds]);
+        totalOccupancy = uniqueBookings.size;
       } else {
-        totalOccupancy = memberships.length;
+        // For memberships, merge scheduled memberships and manual attendances
+        const scheduledMembershipIds = memberships.map(m => m._id.toString());
+        const uniqueMemberships = new Set([...scheduledMembershipIds, ...attendeeMembershipIds]);
+        totalOccupancy = uniqueMemberships.size;
       }
 
       const sessionObj = session.toObject();
