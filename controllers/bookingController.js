@@ -424,6 +424,31 @@ export const createBooking = asyncHandler(async (req, res) => {
   const userForEmail = req.user || { name: guestDetails.name, email: guestDetails.email };
   sendBookingConfirmationEmail(created, classItem, userForEmail).catch(err => console.error('Booking confirmation email failed:', err.message));
 
+  // EMIT: Notify admin room about new booking
+  const io = req.app.get('socketio');
+  if (io) {
+    const LocationModel = mongoose.model('Location');
+    const loc = await LocationModel.findById(resolvedLocationId);
+    io.to('admin_room').emit('new_booking', {
+      bookingNumber: created.bookingNumber,
+      customerName: guestDetails?.name || req.user?.name || 'Customer',
+      locationName: loc?.name || 'Main Center',
+      totalAmount: created.totalAmount
+    });
+  }
+
+  // If it's a package booking, ensure membership and sessions are created
+  if (classItem.classType === 'Plan') {
+    const MembershipModel = mongoose.model('Membership');
+    const membership = await MembershipModel.findOne({ bookingId: created._id });
+    if (membership) {
+      const { generateMembershipSessions } = await import('../services/schedulingService.js');
+      const sessionIds = await generateMembershipSessions(membership, classItem);
+      membership.generatedSessions = [...new Set([...(membership.generatedSessions || []), ...sessionIds])];
+      await membership.save();
+    }
+  }
+
   res.status(201).json(created);
 });
 
@@ -471,15 +496,15 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     // Auto-switch 'attended' to 'completed' for memberships
     const targetStatus = status === 'attended' ? 'completed' : status;
 
-    await Attendance.findOneAndUpdate(filter, { 
-      ...filter, 
+    await Attendance.findOneAndUpdate(filter, {
+      ...filter,
       userId: membership.userId?._id || membership.userId,
       bookingId: membership.bookingId?._id || membership.bookingId,
-      participantName: membership.childId?.name || membership.userId?.name, 
-      locationId: membership.locationId, 
-      status: (targetStatus === 'attended' || targetStatus === 'completed') ? 'present' : 'absent', 
-      method: 'manual', 
-      checkedInAt: new Date() 
+      participantName: membership.childId?.name || membership.userId?.name,
+      locationId: membership.locationId,
+      status: (targetStatus === 'attended' || targetStatus === 'completed') ? 'present' : 'absent',
+      method: 'manual',
+      checkedInAt: new Date()
     }, { upsert: true, new: true });
     return res.json({ message: 'Attendance recorded', classesRemaining: membership.classesRemaining, creditsRemaining: membership.creditsRemaining });
   }
@@ -555,8 +580,33 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     }
     const inv = await Invoice.findOne({ bookingId: booking._id });
     if (inv) { inv.status = 'paid'; await inv.save(); }
+
+    // Re-trigger session generation to catch today's session (now with grace period)
+    if (booking.bookingType === 'package') {
+      const MembershipModel = mongoose.model('Membership');
+      const PlanModel = mongoose.model('Plan');
+      const membership = await MembershipModel.findOne({ bookingId: booking._id });
+      const plan = await PlanModel.findById(booking.planId);
+      if (membership && plan) {
+        const { generateMembershipSessions } = await import('../services/schedulingService.js');
+        const sessionIds = await generateMembershipSessions(membership, plan);
+        membership.generatedSessions = [...new Set([...(membership.generatedSessions || []), ...sessionIds])];
+        await membership.save();
+      }
+    }
   }
   const saved = await booking.save();
+
+  // EMIT: Notify admin room (including trainers/cashiers) that a booking has been updated
+  const io = req.app.get('socketio');
+  if (io) {
+    io.to('admin_room').emit('booking_updated', {
+      bookingId: saved._id,
+      status: saved.status,
+      paymentStatus: saved.paymentStatus
+    });
+  }
+
   res.json(saved);
 });
 
