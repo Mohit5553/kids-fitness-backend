@@ -161,7 +161,7 @@ export const getMyInvoices = asyncHandler(async (req, res) => {
 // @access  Private
 export const getInvoiceById = asyncHandler(async (req, res) => {
   const invoice = await Invoice.findById(req.params.id)
-    .populate('bookingId', 'bookingNumber date status classId sessionId')
+    .populate('bookingId', 'bookingNumber date status classId sessionId paymentMethod')
     .populate('userId', 'name email address phone city country companyName tradeLicenseNo taxNumber companyAddress')
     .populate('locationId', 'name address phone email');
 
@@ -223,7 +223,7 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
     invoice = await generateInvoiceFromBooking(booking);
     // Re-populate to match expected format
     await invoice.populate([
-      { path: 'bookingId', select: 'bookingNumber date status classId sessionId' },
+      { path: 'bookingId', select: 'bookingNumber date status classId sessionId paymentMethod' },
       { path: 'userId', select: 'name email address phone city country companyName tradeLicenseNo taxNumber companyAddress' },
       { path: 'locationId', select: 'name address phone email' }
     ]);
