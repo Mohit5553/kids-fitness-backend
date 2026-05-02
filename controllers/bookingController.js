@@ -569,8 +569,16 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
   const finalStatus = status === 'attended' ? 'completed' : status;
   booking.status = finalStatus || booking.status;
+
+  // Record who processed this update if it's a staff member
+  if (req.user && !['parent', 'customer'].includes(req.user.role?.toLowerCase())) {
+    booking.processedBy = req.user._id;
+    booking.processedByRole = req.user.role;
+  }
+
   if (finalStatus === 'confirmed') {
     booking.paymentStatus = 'completed';
+    if (paymentMethod) booking.paymentMethod = `center_${paymentMethod}`;
     const payRec = await Payment.findOne({ $or: [{ bookingId: booking._id }, { groupId: booking.groupId }] });
     if (payRec) {
       payRec.status = 'paid';

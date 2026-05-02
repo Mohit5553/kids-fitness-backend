@@ -606,6 +606,11 @@ export const createMembership = asyncHandler(async (req, res) => {
     primaryMembership.bookingId = bookingRec._id;
     await primaryMembership.save({ session });
 
+    if (payRec) {
+      payRec.bookingId = bookingRec._id;
+      await payRec.save({ session });
+    }
+
     if (bogoMembershipId) {
        await Membership.findByIdAndUpdate(bogoMembershipId, { bookingId: bookingRec._id }, { session });
     }

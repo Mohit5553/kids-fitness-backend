@@ -385,6 +385,32 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       break;
     }
 
+    case 'sales_report': {
+      const payments = await Payment.find({ ...filter, ...dateFilter, status: 'paid' }).sort({ createdAt: -1 });
+      const dailyMap = {};
+      const monthlyMap = {};
+
+      payments.forEach(p => {
+        const day = p.createdAt.toISOString().slice(0, 10);
+        const month = p.createdAt.toISOString().slice(0, 7);
+
+        if (!dailyMap[day]) dailyMap[day] = { date: day, type: 'Daily', amount: 0, transactions: 0 };
+        dailyMap[day].amount += (p.amount || 0);
+        dailyMap[day].transactions += 1;
+
+        if (!monthlyMap[month]) monthlyMap[month] = { date: month, type: 'Monthly', amount: 0, transactions: 0 };
+        monthlyMap[month].amount += (p.amount || 0);
+        monthlyMap[month].transactions += 1;
+      });
+
+      // Combine and sort
+      data = [
+        ...Object.values(monthlyMap).map(m => ({ ...m, dateDisplay: new Date(m.date + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) })),
+        ...Object.values(dailyMap).map(d => ({ ...d, dateDisplay: new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }))
+      ].sort((a, b) => b.date.localeCompare(a.date));
+      break;
+    }
+
     default:
       res.status(400);
       throw new Error('Invalid report type');

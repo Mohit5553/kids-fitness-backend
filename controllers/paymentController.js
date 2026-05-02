@@ -19,22 +19,62 @@ const syncPayments = async (user = null) => {
       await linkUserBookings(user);
     }
 
+    // 0. Data Repair: Ensure existing healed payments have planId and locationId (enables cleanup and visibility)
+    const incomplete = await Payment.find({
+      bookingId: { $exists: true },
+      $or: [{ planId: { $exists: false } }, { locationId: null }]
+    }).populate('bookingId');
+    for (const p of incomplete) {
+      let changed = false;
+      if (!p.planId && p.bookingId?.planId) {
+        p.planId = p.bookingId.planId;
+        changed = true;
+      }
+      if (!p.locationId && p.bookingId?.locationId) {
+        p.locationId = p.bookingId.locationId;
+        changed = true;
+      }
+      if (changed) await p.save();
+    }
+
     // 2. Global Healing: Find ANY confirmed booking since March 24 missing a Payment record
     // Using March 1st as a safe "recent" margin
     const startDate = new Date('2026-03-01'); 
     const missingBookings = await Booking.find({
-      paymentStatus: 'completed',
       createdAt: { $gte: startDate }
     });
 
     for (const b of missingBookings) {
       // Heal Payment records
-      const exists = await Payment.findOne({ 
+      let exists = await Payment.findOne({ 
         $or: [
           { bookingId: b._id },
           { groupId: b.groupId }
         ].filter(cond => cond.groupId !== undefined || cond.bookingId !== undefined)
       });
+
+      // 2. Heal Orphaned Plan Payments (Walking Bookings)
+      if (!exists && b.bookingType === 'package' && b.planId) {
+        // Look for a payment with same plan/user/amount created within 1 hour of the booking
+        const timeLimit = new Date(b.createdAt);
+        timeLimit.setHours(timeLimit.getHours() - 1);
+        
+        exists = await Payment.findOne({
+          userId: b.userId,
+          planId: b.planId,
+          amount: b.totalAmount,
+          bookingId: { $exists: false },
+          createdAt: { $gte: timeLimit, $lte: new Date(b.createdAt.getTime() + 3600000) }
+        });
+
+        if (exists) {
+          exists.bookingId = b._id;
+          if (exists.status === 'pending' && b.paymentStatus === 'completed') {
+            exists.status = 'paid';
+          }
+          await exists.save();
+        }
+      }
 
       if (!exists) {
         await Payment.create({
@@ -43,8 +83,8 @@ const syncPayments = async (user = null) => {
           groupId: b.groupId,
           amount: b.totalAmount,
           paymentMethod: b.paymentMethod || 'online',
-          status: 'paid',
-          locationId: b.locationId,
+          status: b.paymentStatus === 'completed' ? 'paid' : 'pending',
+          locationId: b.locationId, planId: b.planId, membershipUnits: b.membershipUnits || 1,
           createdAt: b.createdAt
         });
       } else if (exists.status === 'pending') {
@@ -57,6 +97,28 @@ const syncPayments = async (user = null) => {
       if (invoiceRec && invoiceRec.status === 'unpaid') {
         invoiceRec.status = 'paid';
         await invoiceRec.save();
+      }
+    }
+
+    // 3. Aggressive Cleanup: Remove orphaned PENDING payments if a PAID one exists for the same booking/plan
+    const orphanedPending = await Payment.find({
+      status: 'pending',
+      planId: { $exists: true },
+      bookingId: { $exists: false }
+    });
+
+    for (const p of orphanedPending) {
+      const confirmedMatch = await Payment.findOne({
+        userId: p.userId,
+        planId: p.planId,
+        amount: p.amount,
+        status: 'paid',
+        bookingId: { $exists: true }
+      });
+
+      if (confirmedMatch) {
+        // This is a duplicate created by the previous WalkingBooking bug
+        await p.deleteOne();
       }
     }
   } catch (error) {
