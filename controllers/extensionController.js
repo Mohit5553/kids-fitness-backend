@@ -2,6 +2,8 @@ import asyncHandler from 'express-async-handler';
 import ExtensionRequest from '../models/ExtensionRequest.js';
 import Membership from '../models/Membership.js';
 import Session from '../models/Session.js';
+import { generateMembershipSessions } from '../services/schedulingService.js';
+import { notifyAdmins } from '../utils/socketUtils.js';
 
 // @desc    Submit an extension or reschedule request
 // @route   POST /api/extensions/request
@@ -37,6 +39,11 @@ export const requestExtension = asyncHandler(async (req, res) => {
     targetSessionId,
     newDate,
     newSlot
+  });
+
+  notifyAdmins(req, 'new_extension', { 
+    requestId: request._id, 
+    locationId: membership.locationId 
   });
 
   res.status(201).json(request);
@@ -82,6 +89,21 @@ export const processExtension = asyncHandler(async (req, res) => {
           const currentEnd = new Date(membership.endDate);
           membership.endDate = new Date(currentEnd.getTime() + buffer * 24 * 60 * 60 * 1000);
         }
+
+        // RE-GENERATE SESSIONS for the extended period
+        const plan = await Membership.model('Plan').findById(membership.planId);
+        if (plan) {
+          const newSessionIds = await generateMembershipSessions(membership, plan);
+          
+          // Merge without duplicates
+          const existingIds = new Set(membership.generatedSessions.map(id => id.toString()));
+          const uniqueNewIds = newSessionIds.filter(id => !existingIds.has(id.toString()));
+          
+          if (uniqueNewIds.length > 0) {
+            membership.generatedSessions.push(...uniqueNewIds);
+          }
+        }
+
         await membership.save();
       }
     }
@@ -92,22 +114,32 @@ export const processExtension = asyncHandler(async (req, res) => {
 });
 
 // @desc    Get my extension requests
-// @route   GET /api/extensions/my
-// @access  Private
 export const getMyExtensions = asyncHandler(async (req, res) => {
   const requests = await ExtensionRequest.find({ userId: req.user._id })
-    .populate('membershipId')
+    .populate({
+      path: 'membershipId',
+      populate: { path: 'planId' }
+    })
+    .populate({
+      path: 'targetSessionId',
+      populate: { path: 'classId' }
+    })
     .sort({ createdAt: -1 });
   res.json(requests);
 });
 
 // @desc    Get all extension requests (Admin)
-// @route   GET /api/extensions
-// @access  Private/Admin
 export const getAllExtensions = asyncHandler(async (req, res) => {
   const requests = await ExtensionRequest.find({})
     .populate('userId', 'name email')
-    .populate('membershipId')
+    .populate({
+      path: 'membershipId',
+      populate: { path: 'planId' }
+    })
+    .populate({
+      path: 'targetSessionId',
+      populate: { path: 'classId' }
+    })
     .sort({ createdAt: -1 });
   res.json(requests);
 });

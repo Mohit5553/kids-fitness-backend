@@ -10,12 +10,19 @@ import Child from '../models/Child.js';
 import Plan from '../models/Plan.js';
 import Trial from '../models/Trial.js';
 import Attendance from '../models/Attendance.js';
+import Invoice from '../models/Invoice.js';
+import Lead from '../models/Lead.js';
+import ExtensionRequest from '../models/ExtensionRequest.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
   const now = new Date();
   const locationId = resolveReadLocationId(req);
   const locationFilter = locationId ? { locationId } : {};
+
+  // Fetch fresh user to get latest seenAt timestamps
+  const currentUser = await User.findById(req.user._id).select('seenAt').lean();
+  const sa = currentUser?.seenAt || {};
 
   const [
     classCount,
@@ -25,7 +32,12 @@ export const getSummary = asyncHandler(async (req, res) => {
     userTotal,
     adminCount,
     membershipActive,
-    payments
+    payments,
+    pendingTrials,
+    pendingLeads,
+    pendingExtensions,
+    pendingPayments,
+    pendingBookings
   ] = await Promise.all([
     ClassModel.countDocuments(locationFilter),
     Trainer.countDocuments(locationFilter),
@@ -40,7 +52,32 @@ export const getSummary = asyncHandler(async (req, res) => {
     Payment.aggregate([
       ...(locationId ? [{ $match: { locationId } }] : []),
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-    ])
+    ]),
+    Trial.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.trials ? { createdAt: { $gt: sa.trials } } : {})
+    }),
+    Lead.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.leads ? { createdAt: { $gt: sa.leads } } : {})
+    }),
+    ExtensionRequest.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.extensions ? { createdAt: { $gt: sa.extensions } } : {})
+    }),
+    Payment.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.payments ? { createdAt: { $gt: sa.payments } } : {})
+    }),
+    Booking.countDocuments({
+      ...locationFilter,
+      status: 'pending',
+      ...(sa.bookings ? { createdAt: { $gt: sa.bookings } } : {})
+    })
   ]);
 
   const bookingSummary = bookingTotals.reduce(
@@ -65,7 +102,15 @@ export const getSummary = asyncHandler(async (req, res) => {
     },
     payments: {
       totalAmount: paymentSummary.total,
-      count: paymentSummary.count
+      count: paymentSummary.count,
+      pending: pendingPayments
+    },
+    pendingCounts: {
+      trials: pendingTrials,
+      leads: pendingLeads,
+      extensions: pendingExtensions,
+      bookings: pendingBookings,
+      payments: pendingPayments
     }
   });
 });
@@ -408,6 +453,51 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         ...Object.values(monthlyMap).map(m => ({ ...m, dateDisplay: new Date(m.date + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) })),
         ...Object.values(dailyMap).map(d => ({ ...d, dateDisplay: new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }))
       ].sort((a, b) => b.date.localeCompare(a.date));
+      break;
+    }
+
+    case 'detailed_sales': {
+      // Fetch invoices with all related data
+      const invoices = await Invoice.find({ ...filter, ...dateFilter, status: 'paid' })
+        .populate('userId', 'name email phone')
+        .populate('locationId', 'name')
+        .populate('bookingId', 'paymentMethod bookingNumber')
+        .sort({ date: -1 })
+        .lean();
+
+      const lineItems = [];
+      invoices.forEach(inv => {
+        const customerName = inv.userId?.name || inv.guestDetails?.name || 'Guest';
+        const customerEmail = inv.userId?.email || inv.guestDetails?.email || 'N/A';
+        const customerPhone = inv.userId?.phone || inv.guestDetails?.phone || 'N/A';
+        const location = inv.locationId?.name || 'N/A';
+        const paymentMode = inv.bookingId?.paymentMethod?.replace('center_', '').toUpperCase() || 'N/A';
+        const bookingNumber = inv.bookingId?.bookingNumber || 'N/A';
+
+        const safeItems = Array.isArray(inv.items) ? inv.items : [];
+        
+        safeItems.forEach(item => {
+          lineItems.push({
+            location,
+            invoiceNumber: inv.invoiceNumber || 'N/A',
+            bookingNumber,
+            invoiceDate: inv.date,
+            customerName,
+            customerPhone,
+            customerEmail,
+            item: item.description || 'Service',
+            unitPrice: item.unitPrice || 0,
+            quantity: item.quantity || 1,
+            lineTotal: item.total || 0,
+            lineVat: item.taxAmount || 0,
+            discount: (inv.discountAmount || 0) + (inv.couponAmount || 0),
+            discountType: inv.couponCode ? `Coupon (${inv.couponCode})` : ((inv.discountAmount || 0) > 0 ? 'Promo' : 'None'),
+            totalAmount: inv.totalAmount || 0,
+            paymentMode
+          });
+        });
+      });
+      data = lineItems;
       break;
     }
 

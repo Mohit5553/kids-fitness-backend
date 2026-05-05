@@ -290,3 +290,17 @@ export const adminUpdatePassword = asyncHandler(async (req, res) => {
 
   res.json({ message: 'Password updated successfully' });
 });
+
+// @desc    Update last viewed timestamp for a category
+// @route   PUT /api/users/last-viewed/:category
+// @access  Private/Admin
+export const updateLastViewed = asyncHandler(async (req, res) => {
+  const { category } = req.params;
+  const updateKey = `seenAt.${category}`;
+  
+  await User.findByIdAndUpdate(req.user._id, { 
+    $set: { [updateKey]: new Date() } 
+  });
+
+  res.json({ message: `Seen status for ${category} updated` });
+});

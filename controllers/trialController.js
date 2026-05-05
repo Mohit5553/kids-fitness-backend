@@ -1,5 +1,6 @@
 import asyncHandler from 'express-async-handler';
 import Trial from '../models/Trial.js';
+import { notifyAdmins } from '../utils/socketUtils.js';
 import { sendTrialConfirmationEmail } from '../utils/mailer.js';
 import { sendSms } from '../utils/sms.js';
 import { toCsv } from '../utils/csv.js';
@@ -24,6 +25,8 @@ export const createTrial = asyncHandler(async (req, res) => {
     preferredTime,
     locationId
   });
+
+  notifyAdmins(req, 'new_trial', { trialId: created._id });
 
   let emailSent = false;
   let smsSent = false;

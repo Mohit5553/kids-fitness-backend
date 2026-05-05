@@ -27,7 +27,14 @@ const userSchema = new mongoose.Schema(
     companyAddress: { type: String },
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date },
-    status: { type: String, enum: ['active', 'inactive'], default: 'active' }
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    seenAt: {
+      bookings: Date,
+      trials: Date,
+      leads: Date,
+      extensions: Date,
+      payments: Date
+    }
   },
   { timestamps: true }
 );

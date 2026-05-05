@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import { notifyAdmins } from '../utils/socketUtils.js';
 import mongoose from 'mongoose';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
@@ -29,8 +30,28 @@ export const getMyBookings = asyncHandler(async (req, res) => {
     .populate('classId', 'title price')
     .populate('planId', 'name price priceMonthly')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+    .populate('locationId', 'name')
     .sort({ createdAt: -1 });
   res.json(bookings);
+});
+
+export const getBookingSchedule = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const membership = await Membership.findOne({ bookingId: id })
+    .populate({
+      path: 'generatedSessions',
+      populate: [
+        { path: 'trainerId', select: 'name' },
+        { path: 'classId', select: 'title' }
+      ]
+    });
+
+  if (!membership) {
+    res.status(404);
+    throw new Error('Membership schedule not found for this booking');
+  }
+
+  res.json(membership.generatedSessions);
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
@@ -353,6 +374,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
   const created = await Booking.create(bookingData);
+  notifyAdmins(req, 'new_booking', { bookingId: created._id });
 
   // COUPON REDEMPTION LOGIC
   if (req.body.couponCode) {
