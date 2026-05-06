@@ -42,10 +42,10 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
         const dayOfWeek = currentDate.getDay();
 
         if (targetDays.includes(dayOfWeek)) {
-            // For each preferred slot on this day
-            // Robust Time Parsing
+            // For each preferred slot on this day, try to create ONE session
+            let sessionCreatedForToday = false;
             for (const slot of finalSlots) {
-                if (sessionsCreated >= maxSessions) break;
+                if (sessionsCreated >= maxSessions || sessionCreatedForToday) break;
 
                 // Use regex for robust extraction: handles "10Am", "9:00am", "10:30 PM", etc.
                 const timeMatch = slot.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?$/i);
@@ -178,6 +178,7 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
 
                     sessions.push(targetSessionId);
                     sessionsCreated++;
+                    sessionCreatedForToday = true;
                 }
             }
         }

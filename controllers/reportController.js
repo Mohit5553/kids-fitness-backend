@@ -220,21 +220,19 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           .populate('processedBy', 'name')
           .sort({ date: -1 })
           .lean(),
-        Attendance.find({
+        Session.find({
           ...filter,
-          ...attendanceDateFilter,
-          membershipId: { $exists: true }
+          startTime: { $gte: sDate || new Date(0), $lte: eDate || new Date(9999, 11, 31) },
+          classType: 'Plan'
         })
-          .populate({
-            path: 'sessionId', populate: [
-              { path: 'trainerId', select: 'name' },
-              { path: 'classId', select: 'title' }
-            ]
+          .populate('trainerId', 'name')
+          .populate('classId', 'title')
+          .populate({ 
+            path: 'membershipId', 
+            populate: { path: 'userId', select: 'name email phone' }
           })
-          .populate('userId', 'name email phone')
-          .populate('childId', 'name')
-          .populate('membershipId', 'bookingNumber')
           .populate('locationId', 'name')
+          .sort({ startTime: -1 })
           .lean()
       ]);
 
@@ -247,20 +245,25 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       });
 
       // Enrich Membership Sessions
-      const sessions = membershipSessions.map(att => ({
-        _id: att._id,
-        bookingNumber: `MR-${att.membershipId?.bookingNumber || 'SESS'}-${att._id.toString().slice(-4).toUpperCase()}`,
-        userId: att.userId,
-        participants: att.childId ? [{ name: att.childId.name, childId: att.childId._id }] : [{ name: att.participantName || 'Unknown Student' }],
-        classId: att.sessionId?.classId || { title: 'Membership Session' },
-        sessionId: att.sessionId,
-        date: att.sessionId?.startTime || att.checkedInAt,
-        totalAmount: 0,
-        status: 'confirmed',
-        paymentStatus: 'completed',
-        method: att.method === 'qr' ? 'Member QR' : 'Member Manual',
-        locationId: att.locationId
-      })).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const now = new Date();
+      const sessions = membershipSessions.map(sess => {
+        const isUpcoming = new Date(sess.startTime) > now;
+        return {
+          _id: sess._id,
+          bookingNumber: sess.membershipId?.bookingNumber || 'N/A',
+          userId: sess.membershipId?.userId,
+          participants: sess.membershipId?.childId ? [{ name: sess.membershipId.childId.name }] : [{ name: 'N/A' }],
+          classId: sess.classId || { title: 'Membership Session' },
+          sessionId: { trainerId: sess.trainerId },
+          date: sess.startTime,
+          slotTiming: sess.startTime,
+          totalAmount: 0,
+          status: isUpcoming ? 'UPCOMING' : (sess.attendanceStatus === 'present' ? 'PRESENT' : 'PAST'),
+          paymentStatus: 'completed',
+          method: sess.attendanceStatus || 'scheduled',
+          locationId: sess.locationId
+        };
+      }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
       data = { purchases, sessions };
       break;
@@ -471,7 +474,19 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         const customerEmail = inv.userId?.email || inv.guestDetails?.email || 'N/A';
         const customerPhone = inv.userId?.phone || inv.guestDetails?.phone || 'N/A';
         const location = inv.locationId?.name || 'N/A';
-        const paymentMode = inv.bookingId?.paymentMethod?.replace('center_', '').toUpperCase() || 'N/A';
+        const rawMethod = inv.bookingId?.paymentMethod || 'N/A';
+        let paymentMode = rawMethod;
+        let paymentType = 'N/A';
+
+        if (rawMethod.toLowerCase().startsWith('center_') || rawMethod.toLowerCase() === 'center') {
+          paymentMode = 'CENTER';
+          paymentType = rawMethod.toLowerCase() === 'center' ? 'UNSPECIFIED' : rawMethod.replace('center_', '').toUpperCase();
+        } else if (rawMethod.toLowerCase() === 'online') {
+          paymentMode = 'WEBSITE';
+          paymentType = 'CARD/GATEWAY';
+        } else {
+          paymentMode = rawMethod.toUpperCase();
+        }
         const bookingNumber = inv.bookingId?.bookingNumber || 'N/A';
 
         const safeItems = Array.isArray(inv.items) ? inv.items : [];
@@ -493,7 +508,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
             discount: (inv.discountAmount || 0) + (inv.couponAmount || 0),
             discountType: inv.couponCode ? `Coupon (${inv.couponCode})` : ((inv.discountAmount || 0) > 0 ? 'Promo' : 'None'),
             totalAmount: inv.totalAmount || 0,
-            paymentMode
+            paymentMode,
+            paymentType
           });
         });
       });
