@@ -16,6 +16,8 @@ import Coupon from '../models/Coupon.js';
 import { calculateTax } from '../utils/taxCalculator.js';
 import { getNextInvoiceNumber, getNextBookingNumber } from '../utils/sequenceGenerator.js';
 import Attendance from '../models/Attendance.js';
+import ExtensionRequest from '../models/ExtensionRequest.js';
+import { notifyAdmins } from '../utils/socketUtils.js';
 
 const addDays = (date, days) => {
   const result = new Date(date);
@@ -66,19 +68,19 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
         if (m.bookingId && m.bookingId._id && !m.bookingId.bookingNumber) {
           const b = await Booking.findById(m.bookingId._id);
           if (b && !b.bookingNumber) {
-              b.bookingNumber = `BK-${b._id.toString().slice(-4).toUpperCase()}`;
-              await b.save();
-              saved = true;
+            b.bookingNumber = `BK-${b._id.toString().slice(-4).toUpperCase()}`;
+            await b.save();
+            saved = true;
           }
         }
 
         // 2. Specialized fix for Mohit and Hardik
         if (isMohit && !m.childId && (m.planId?.name?.includes('Starter') || m.planId?.name?.includes('25'))) {
-           const hardik = await Child.findOne({ name: /Hardik/i });
-           if (hardik) {
-               m.childId = hardik._id;
-               saved = true;
-           }
+          const hardik = await Child.findOne({ name: /Hardik/i });
+          if (hardik) {
+            m.childId = hardik._id;
+            saved = true;
+          }
         }
 
         // 3. Self-healing: broaden matching for old records missing bookingId
@@ -106,86 +108,86 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
             saved = true;
             console.log(`[Self-healing] Linked membership ${m._id} to existing booking ${matchingBooking.bookingNumber}`);
           } else {
-             // DEEP HEALING: If no booking exists AT ALL in the DB, re-create it now
-             try {
-                const plan = await Plan.findById(m.planId);
-                if (plan) {
-                    const bookingNumber = await getNextBookingNumber();
-                    
-                    const heelChild = m.childId ? await Child.findById(m.childId) : null;
-                    const heelPay = m.paymentId ? await Payment.findById(m.paymentId) : null;
+            // DEEP HEALING: If no booking exists AT ALL in the DB, re-create it now
+            try {
+              const plan = await Plan.findById(m.planId);
+              if (plan) {
+                const bookingNumber = await getNextBookingNumber();
 
-                    const heelBookingData = {
-                        userId: m.userId,
-                        bookingNumber,
-                        bookingType: 'package',
-                        planId: plan._id,
-                        date: m.startDate || m.createdAt,
-                        totalAmount: heelPay ? heelPay.amount : plan.price,
-                        status: 'confirmed',
-                        paymentStatus: 'completed',
-                        paymentMethod: heelPay ? heelPay.paymentMethod : 'center',
-                        paymentId: m.paymentId,
-                        locationId: plan.locationId,
-                        participants: heelChild ? [{
-                            name: heelChild.name,
-                            age: heelChild.age,
-                            gender: heelChild.gender,
-                            relation: 'Child',
-                            childId: heelChild._id
-                         }] : [{
-                            name: req.user.name || 'Account Holder',
-                            age: 18,
-                            relation: 'Self'
-                         }]
-                    };
+                const heelChild = m.childId ? await Child.findById(m.childId) : null;
+                const heelPay = m.paymentId ? await Payment.findById(m.paymentId) : null;
 
-                    const healedBooking = await Booking.create(heelBookingData);
-                    m.bookingId = healedBooking._id;
-                    saved = true;
-                    console.log(`[Deep Healing] Re-created missing booking ${bookingNumber} for membership ${m._id}`);
-                }
-             } catch (healErr) {
-                console.error(`[Deep Healing Fail] for membership ${m._id}:`, healErr.message);
-             }
+                const heelBookingData = {
+                  userId: m.userId,
+                  bookingNumber,
+                  bookingType: 'package',
+                  planId: plan._id,
+                  date: m.startDate || m.createdAt,
+                  totalAmount: heelPay ? heelPay.amount : plan.price,
+                  status: 'confirmed',
+                  paymentStatus: 'completed',
+                  paymentMethod: heelPay ? heelPay.paymentMethod : 'center',
+                  paymentId: m.paymentId,
+                  locationId: plan.locationId,
+                  participants: heelChild ? [{
+                    name: heelChild.name,
+                    age: heelChild.age,
+                    gender: heelChild.gender,
+                    relation: 'Child',
+                    childId: heelChild._id
+                  }] : [{
+                    name: req.user.name || 'Account Holder',
+                    age: 18,
+                    relation: 'Self'
+                  }]
+                };
+
+                const healedBooking = await Booking.create(heelBookingData);
+                m.bookingId = healedBooking._id;
+                saved = true;
+                console.log(`[Deep Healing] Re-created missing booking ${bookingNumber} for membership ${m._id}`);
+              }
+            } catch (healErr) {
+              console.error(`[Deep Healing Fail] for membership ${m._id}:`, healErr.message);
+            }
           }
         }
 
         // 4. Invoice Healer: Restore missing invoices for existing bookings
         if (m.bookingId) {
-            const invoiceExists = await Invoice.findOne({ bookingId: m.bookingId?._id || m.bookingId });
-            if (!invoiceExists) {
-                try {
-                    console.log(`[Invoice Healer] Restoring missing invoice for booking: ${m.bookingId}`);
-                    const booking = await Booking.findById(m.bookingId);
-                    const plan = await Plan.findById(m.planId);
-                    if (booking && plan) {
-                        const newInvoiceNumber = await getNextInvoiceNumber();
-                        await Invoice.create({
-                            invoiceNumber: newInvoiceNumber,
-                            bookingId: booking._id,
-                            userId: m.userId?._id || m.userId,
-                            amount: booking.totalAmount || plan.price,
-                            grossAmount: plan.price,
-                            totalAmount: booking.totalAmount || plan.price,
-                            taxAmount: booking.taxAmount || 0,
-                            discountAmount: booking.discountAmount || 0,
-                            couponAmount: booking.couponAmount || 0,
-                            couponCode: booking.couponCode,
-                            status: 'paid',
-                            locationId: m.locationId,
-                            items: [{
-                                description: `${plan.name} - Package (Restored)`,
-                                quantity: 1,
-                                unitPrice: plan.price,
-                                total: plan.price
-                            }]
-                        });
-                    }
-                } catch (healErr) {
-                    console.error('[Invoice Healer] Failed to restore invoice:', healErr.message);
-                }
+          const invoiceExists = await Invoice.findOne({ bookingId: m.bookingId?._id || m.bookingId });
+          if (!invoiceExists) {
+            try {
+              console.log(`[Invoice Healer] Restoring missing invoice for booking: ${m.bookingId}`);
+              const booking = await Booking.findById(m.bookingId);
+              const plan = await Plan.findById(m.planId);
+              if (booking && plan) {
+                const newInvoiceNumber = await getNextInvoiceNumber();
+                await Invoice.create({
+                  invoiceNumber: newInvoiceNumber,
+                  bookingId: booking._id,
+                  userId: m.userId?._id || m.userId,
+                  amount: booking.totalAmount || plan.price,
+                  grossAmount: plan.price,
+                  totalAmount: booking.totalAmount || plan.price,
+                  taxAmount: booking.taxAmount || 0,
+                  discountAmount: booking.discountAmount || 0,
+                  couponAmount: booking.couponAmount || 0,
+                  couponCode: booking.couponCode,
+                  status: 'paid',
+                  locationId: m.locationId,
+                  items: [{
+                    description: `${plan.name} - Package (Restored)`,
+                    quantity: 1,
+                    unitPrice: plan.price,
+                    total: plan.price
+                  }]
+                });
+              }
+            } catch (healErr) {
+              console.error('[Invoice Healer] Failed to restore invoice:', healErr.message);
             }
+          }
         }
 
         if (saved) await m.save();
@@ -194,45 +196,64 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
         // Continue to next membership even if one fails to heal
       }
     }
-    
+
     // 5. FINAL POPULATION: Ensure healed records have full objects before sending to frontend
     const healedMemberships = await Membership.find({ _id: { $in: memberships.map(m => m._id) } })
-        .populate('userId', 'name email firstName lastName')
-        .populate('planId')
-        .populate('childId')
-        .populate({ path: 'bookingId', select: 'participants bookingNumber' })
-        .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } })
-        .sort({ createdAt: -1 });
+      .populate('userId', 'name email firstName lastName')
+      .populate('planId')
+      .populate('childId')
+      .populate({ path: 'bookingId', select: 'participants bookingNumber' })
+      .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } })
+      .sort({ createdAt: -1 });
 
     // FETCH ATTENDANCE DATA TO ENRICH SESSIONS
     const mIds = healedMemberships.map(m => m._id);
-    const atts = await Attendance.find({ 
-        membershipId: { $in: mIds } 
+    const bIds = healedMemberships.map(m => m.bookingId?._id || m.bookingId).filter(Boolean);
+    const atts = await Attendance.find({
+      $or: [
+        { membershipId: { $in: mIds } },
+        { bookingId: { $in: bIds } }
+      ]
     }).lean();
 
-    // Transform memberships to include attendanceStatus in each generatedSession
-    const finalMemberships = healedMemberships.map(m => {
-        const mObj = m.toObject();
-        if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
-            mObj.generatedSessions = mObj.generatedSessions.map(session => {
-                const att = atts.find(a => 
-                    a.membershipId?.toString() === m._id.toString() && 
-                    a.sessionId?.toString() === session._id.toString()
-                );
-                
-                let attendanceStatus = 'pending'; // Default
-                if (att) {
-                  attendanceStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
-                }
+    // Transform memberships to include attendanceStatus in each generatedSession and overall counts
+    const finalMemberships = await Promise.all(healedMemberships.map(async (m) => {
+      const mObj = m.toObject();
+      const membershipAtts = atts.filter(a => 
+        a.membershipId?.toString() === m._id.toString() ||
+        (m.bookingId?._id?.toString() === a.bookingId?.toString() && a.bookingId)
+      );
+      
+      mObj.attendedCount = membershipAtts.filter(a => ['present', 'late'].includes(a.status)).length;
+      mObj.absentCount = membershipAtts.filter(a => a.status === 'absent').length;
 
-                return {
-                    ...session,
-                    attendanceStatus
-                };
-            });
-        }
-        return mObj;
-    });
+      // Count approved reschedules
+      mObj.rescheduleCount = await ExtensionRequest.countDocuments({
+        membershipId: m._id,
+        type: 'reschedule',
+        status: 'approved'
+      });
+      mObj.maxReschedules = m.planId?.extensionRules?.maxAllowedMissed || 0;
+
+      if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
+        mObj.generatedSessions = mObj.generatedSessions.map(session => {
+          const att = membershipAtts.find(a =>
+            a.sessionId?.toString() === session._id.toString()
+          );
+
+          let attendanceStatus = 'pending'; // Default
+          if (att) {
+            attendanceStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
+          }
+
+          return {
+            ...session,
+            attendanceStatus
+          };
+        });
+      }
+      return mObj;
+    }));
 
     res.json(finalMemberships);
   } catch (error) {
@@ -244,7 +265,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
 export const getAllMemberships = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
-  
+
   const memberships = await Membership.find(filter)
     .populate('userId', 'name email')
     .populate('planId', 'name price validity type classesIncluded durationWeeks billingCycle')
@@ -257,7 +278,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
       membershipId: m._id,
       status: { $in: ['present', 'late'] }
     });
-    
+
     return {
       ...m.toObject(),
       sessionsUsed: attendanceCount
@@ -305,16 +326,16 @@ export const createMembership = asyncHandler(async (req, res) => {
   if (plan.gender && plan.gender !== 'mixed') {
     let pGender = '';
     if (childId) {
-       const c = await Child.findById(childId);
-       pGender = c?.gender;
+      const c = await Child.findById(childId);
+      pGender = c?.gender;
     } else {
-       pGender = req.user.gender;
+      pGender = req.user.gender;
     }
 
     // Strict validation: if we know the gender and it doesn't match, block it.
     if (pGender && pGender !== 'other' && pGender !== plan.gender) {
-       res.status(400);
-       throw new Error(`Gender Mismatch: This membership is restricted to ${plan.gender}s only.`);
+      res.status(400);
+      throw new Error(`Gender Mismatch: This membership is restricted to ${plan.gender}s only.`);
     }
   }
 
@@ -325,10 +346,10 @@ export const createMembership = asyncHandler(async (req, res) => {
 
   // Use provided startDate or default to now
   const startDate = reqStartDate ? new Date(reqStartDate) : new Date();
-  
+
   // Ensure we normalize to start of day for consistency if needed, 
   // though Date(reqStartDate) from an input type="date" usually handles this.
-  
+
   let endDate;
 
   if (plan.type === 'subscription' && plan.billingCycle && plan.billingCycle !== 'none') {
@@ -353,13 +374,13 @@ export const createMembership = asyncHandler(async (req, res) => {
 
   // -1 = unlimited/time-based (classesIncluded is 0 or null, or explicit type)
   const isInfinite = plan.classesIncluded === 0 || plan.type === 'unlimited' || plan.type === 'time-based';
-  
+
   let baseClasses = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : 0);
   let classesRemaining = isInfinite ? -1 : baseClasses * membershipUnits;
-  
+
   // Credits initialization
-  let creditsRemaining = (plan.type === 'credit-based' && plan.creditsIncluded) 
-    ? plan.creditsIncluded * membershipUnits 
+  let creditsRemaining = (plan.type === 'credit-based' && plan.creditsIncluded)
+    ? plan.creditsIncluded * membershipUnits
     : 0;
 
   let finalEndDate = endDate;
@@ -401,8 +422,8 @@ export const createMembership = asyncHandler(async (req, res) => {
     planId: planId,
     status: { $in: ['active', 'frozen'] },
     $or: [
-        { endDate: { $gte: startDate } },
-        { endDate: null } // Unlimited validity
+      { endDate: { $gte: startDate } },
+      { endDate: null } // Unlimited validity
     ]
   }).populate('planId', 'name');
 
@@ -415,8 +436,8 @@ export const createMembership = asyncHandler(async (req, res) => {
   if (preferredDays?.length > 0 && preferredSlots?.length > 0) {
     // Basic day normalization for robust comparison (handles "Mon" vs "Monday")
     const dayNormalizer = {
-        'sun': 'sun', 'mon': 'mon', 'tue': 'tue', 'wed': 'wed', 'thu': 'thu', 'fri': 'fri', 'sat': 'sat',
-        'sunday': 'sun', 'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed', 'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat'
+      'sun': 'sun', 'mon': 'mon', 'tue': 'tue', 'wed': 'wed', 'thu': 'thu', 'fri': 'fri', 'sat': 'sat',
+      'sunday': 'sun', 'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed', 'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat'
     };
     const inputNormalizedDays = preferredDays.map(d => dayNormalizer[d.toLowerCase().trim()]).filter(Boolean);
 
@@ -431,16 +452,16 @@ export const createMembership = asyncHandler(async (req, res) => {
     }).populate('planId', 'name');
 
     for (const m of overlappingMemberships) {
-        const mNormalizedDays = (m.preferredDays || []).map(d => dayNormalizer[d.toLowerCase().trim()]).filter(Boolean);
-        const hasDayOverlap = inputNormalizedDays.some(d => mNormalizedDays.includes(d));
-        
-        if (hasDayOverlap) {
-            const hasSlotOverlap = preferredSlots.some(s => (m.preferredSlots || []).includes(s));
-            if (hasSlotOverlap) {
-                res.status(400);
-                throw new Error(`Conflict: This student already has an active membership ("${m.planId.name}") booked for the same day and time slots.`);
-            }
+      const mNormalizedDays = (m.preferredDays || []).map(d => dayNormalizer[d.toLowerCase().trim()]).filter(Boolean);
+      const hasDayOverlap = inputNormalizedDays.some(d => mNormalizedDays.includes(d));
+
+      if (hasDayOverlap) {
+        const hasSlotOverlap = preferredSlots.some(s => (m.preferredSlots || []).includes(s));
+        if (hasSlotOverlap) {
+          res.status(400);
+          throw new Error(`Conflict: This student already has an active membership ("${m.planId.name}") booked for the same day and time slots.`);
         }
+      }
     }
   }
 
@@ -473,7 +494,7 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     let payRec = null;
     if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
-        payRec = await Payment.findById(paymentId).session(session);
+      payRec = await Payment.findById(paymentId).session(session);
     }
 
     let resolvedPaymentMethod = payRec ? payRec.paymentMethod : 'center';
@@ -485,7 +506,7 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     const primaryChild = await Child.findById(childId).session(session);
     const participants = [];
-    
+
     if (primaryChild) {
       participants.push({
         name: primaryChild.name,
@@ -505,42 +526,42 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     let bogoMembershipId = null;
     if (claimBogo && !isConsolidatedBogo) {
-       const finalBogoChildId = bogoChildId || childId;
-       const bogoChild = await Child.findById(finalBogoChildId).session(session);
-       
-       const [freeMembership] = await Membership.create([{
-          userId: targetUserId,
-          planId,
-          startDate,
-          endDate,
-          autoRenew: false,
-          classesRemaining: plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined),
-          childId: finalBogoChildId,
-          preferredDays,
-          preferredSlots,
-          sessionsPerWeek,
-          paymentId,
-          locationId: plan.locationId,
-          isBogoFree: true
-       }], { session });
+      const finalBogoChildId = bogoChildId || childId;
+      const bogoChild = await Child.findById(finalBogoChildId).session(session);
 
-       bogoMembershipId = freeMembership._id;
+      const [freeMembership] = await Membership.create([{
+        userId: targetUserId,
+        planId,
+        startDate,
+        endDate,
+        autoRenew: false,
+        classesRemaining: plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : undefined),
+        childId: finalBogoChildId,
+        preferredDays,
+        preferredSlots,
+        sessionsPerWeek,
+        paymentId,
+        locationId: plan.locationId,
+        isBogoFree: true
+      }], { session });
 
-       if (preferredDays && preferredSlots && preferredDays.length > 0) {
-          const freeSessionIds = await generateMembershipSessions(freeMembership, plan, session);
-          freeMembership.generatedSessions = freeSessionIds;
-          await freeMembership.save({ session });
-       }
+      bogoMembershipId = freeMembership._id;
 
-       if (bogoChild) {
-          participants.push({
-             name: bogoChild.name,
-             age: bogoChild.age,
-             gender: bogoChild.gender,
-             relation: 'Child',
-             childId: bogoChild._id
-          });
-       }
+      if (preferredDays && preferredSlots && preferredDays.length > 0) {
+        const freeSessionIds = await generateMembershipSessions(freeMembership, plan, session);
+        freeMembership.generatedSessions = freeSessionIds;
+        await freeMembership.save({ session });
+      }
+
+      if (bogoChild) {
+        participants.push({
+          name: bogoChild.name,
+          age: bogoChild.age,
+          gender: bogoChild.gender,
+          relation: 'Child',
+          childId: bogoChild._id
+        });
+      }
     }
 
     const bookingNumber = await getNextBookingNumber();
@@ -552,20 +573,20 @@ export const createMembership = asyncHandler(async (req, res) => {
     let taxAmount = 0;
     let activeTax = null;
     if (plan.taxId) {
-       activeTax = await Tax.findById(plan.taxId);
+      activeTax = await Tax.findById(plan.taxId);
     } else if (plan.locationId) {
-       activeTax = await Tax.findOne({ 
-          locationId: plan.locationId, 
-          status: 'active',
-          $or: [
-            { validityEnd: { $exists: false } },
-            { validityEnd: { $gte: new Date() } }
-          ]
-       });
+      activeTax = await Tax.findOne({
+        locationId: plan.locationId,
+        status: 'active',
+        $or: [
+          { validityEnd: { $exists: false } },
+          { validityEnd: { $gte: new Date() } }
+        ]
+      });
     }
 
     if (activeTax) {
-       taxAmount = calculateTax(netBaseAmount, activeTax);
+      taxAmount = calculateTax(netBaseAmount, activeTax);
     }
 
     const totalAmount = (activeTax?.calculationMethod === 'inclusive') ? netBaseAmount : (netBaseAmount + taxAmount);
@@ -603,6 +624,15 @@ export const createMembership = asyncHandler(async (req, res) => {
       participants
     }], { session });
 
+    notifyAdmins(req, 'new_booking', { 
+      bookingId: bookingRec._id, 
+      locationId: bookingRec.locationId 
+    });
+    notifyAdmins(req, 'new_payment', { 
+      bookingId: bookingRec._id, 
+      locationId: bookingRec.locationId 
+    });
+
     primaryMembership.bookingId = bookingRec._id;
     await primaryMembership.save({ session });
 
@@ -612,99 +642,99 @@ export const createMembership = asyncHandler(async (req, res) => {
     }
 
     if (bogoMembershipId) {
-       await Membership.findByIdAndUpdate(bogoMembershipId, { bookingId: bookingRec._id }, { session });
+      await Membership.findByIdAndUpdate(bogoMembershipId, { bookingId: bookingRec._id }, { session });
     }
 
     const invoiceNumber = await getNextInvoiceNumber();
     const invoiceItems = [{
-       description: `${plan.name} - Package Enrollment`,
-       quantity: membershipUnits,
-       unitPrice: plan.price,
-       taxAmount: (activeTax && !isConsolidatedBogo) ? (taxAmount / membershipUnits) : 0,
-       total: plan.price * membershipUnits
+      description: `${plan.name} - Package Enrollment`,
+      quantity: membershipUnits,
+      unitPrice: plan.price,
+      taxAmount: (activeTax && !isConsolidatedBogo) ? (taxAmount / membershipUnits) : 0,
+      total: plan.price * membershipUnits
     }];
 
     if (claimBogo && !isConsolidatedBogo) {
-       invoiceItems.push({
-          description: `BOGO Promo - Free Item`,
-          quantity: membershipUnits,
-          unitPrice: 0,
-          total: 0
-       });
+      invoiceItems.push({
+        description: `BOGO Promo - Free Item`,
+        quantity: membershipUnits,
+        unitPrice: 0,
+        total: 0
+      });
     }
 
     if (discountAmount > 0) {
-       invoiceItems.push({
-          description: `Promotion Discount`,
-          quantity: 1,
-          unitPrice: -discountAmount,
-          total: -discountAmount
-       });
+      invoiceItems.push({
+        description: `Promotion Discount`,
+        quantity: 1,
+        unitPrice: -discountAmount,
+        total: -discountAmount
+      });
     }
 
     if (resolvedCouponAmount > 0) {
-       invoiceItems.push({
-          description: resolvedCouponCode ? `Cash Voucher Applied (${resolvedCouponCode})` : 'Cash Voucher Applied',
-          quantity: 1,
-          unitPrice: -resolvedCouponAmount,
-          total: -resolvedCouponAmount
-       });
+      invoiceItems.push({
+        description: resolvedCouponCode ? `Cash Voucher Applied (${resolvedCouponCode})` : 'Cash Voucher Applied',
+        quantity: 1,
+        unitPrice: -resolvedCouponAmount,
+        total: -resolvedCouponAmount
+      });
     }
 
     await Invoice.create([{
-       invoiceNumber,
-       bookingId: bookingRec._id,
-       userId: targetUserId,
-       amount: totalAmount,
-       grossAmount: plan.price * membershipUnits,
-       totalAmount: totalAmount,
-       taxAmount: taxAmount,
-       status: resolvedPaymentMethod === 'center' ? 'unpaid' : 'paid',
-       items: invoiceItems,
-       locationId: plan.locationId,
-       discountAmount: discountAmount || 0,
-       couponAmount: resolvedCouponAmount || 0,
-       couponCode: resolvedCouponCode
+      invoiceNumber,
+      bookingId: bookingRec._id,
+      userId: targetUserId,
+      amount: totalAmount,
+      grossAmount: plan.price * membershipUnits,
+      totalAmount: totalAmount,
+      taxAmount: taxAmount,
+      status: resolvedPaymentMethod === 'center' ? 'unpaid' : 'paid',
+      items: invoiceItems,
+      locationId: plan.locationId,
+      discountAmount: discountAmount || 0,
+      couponAmount: resolvedCouponAmount || 0,
+      couponCode: resolvedCouponCode
     }], { session });
-    
+
     // COUPON GENERATION LOGIC (Cash Deposit Promo)
     if (promotionId) {
-       const promo = await Promotion.findById(promotionId).session(session);
-       if (promo && promo.promoType === 'cash_deposit') {
-          const couponValue = (promo.discountType === 'percentage') 
-             ? (plan.price * (promo.discountValue / 100))
-             : Math.min(plan.price, promo.discountValue);
-          
-          if (couponValue > 0) {
-             const generatedCode = `CPN-M-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-             const expiryDate = new Date();
-             expiryDate.setDate(expiryDate.getDate() + 90);
+      const promo = await Promotion.findById(promotionId).session(session);
+      if (promo && promo.promoType === 'cash_deposit') {
+        const couponValue = (promo.discountType === 'percentage')
+          ? (plan.price * (promo.discountValue / 100))
+          : Math.min(plan.price, promo.discountValue);
 
-             await Coupon.create([{
-                code: generatedCode,
-                userId: targetUserId,
-                amount: Math.round(couponValue * 100) / 100,
-                expiryDate,
-                sourceBookingId: bookingRec._id,
-                status: 'active'
-             }], { session });
-          }
-       }
+        if (couponValue > 0) {
+          const generatedCode = `CPN-M-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+          const expiryDate = new Date();
+          expiryDate.setDate(expiryDate.getDate() + 90);
+
+          await Coupon.create([{
+            code: generatedCode,
+            userId: targetUserId,
+            amount: Math.round(couponValue * 100) / 100,
+            expiryDate,
+            sourceBookingId: bookingRec._id,
+            status: 'active'
+          }], { session });
+        }
+      }
     }
 
     // COUPON REDEMPTION LOGIC
     if (resolvedCouponCode) {
-       const redeemedCoupon = await Coupon.findOne({ code: resolvedCouponCode, status: 'active' }).session(session);
-       if (redeemedCoupon) {
-          redeemedCoupon.status = 'redeemed';
-          redeemedCoupon.redeemBookingId = bookingRec._id;
-          redeemedCoupon.redeemedAt = new Date();
-          // Assign user if it was an anonymous voucher
-          if (!redeemedCoupon.userId) {
-             redeemedCoupon.userId = targetUserId;
-          }
-          await redeemedCoupon.save({ session });
-       }
+      const redeemedCoupon = await Coupon.findOne({ code: resolvedCouponCode, status: 'active' }).session(session);
+      if (redeemedCoupon) {
+        redeemedCoupon.status = 'redeemed';
+        redeemedCoupon.redeemBookingId = bookingRec._id;
+        redeemedCoupon.redeemedAt = new Date();
+        // Assign user if it was an anonymous voucher
+        if (!redeemedCoupon.userId) {
+          redeemedCoupon.userId = targetUserId;
+        }
+        await redeemedCoupon.save({ session });
+      }
     }
 
     await session.commitTransaction();
@@ -719,13 +749,13 @@ export const createMembership = asyncHandler(async (req, res) => {
     res.status(201).json(final);
   } catch (err) {
     if (session.inTransaction()) {
-        await session.abortTransaction();
+      await session.abortTransaction();
     }
     console.error('[Transaction Abort] Internal Error:', err.message);
-    res.status(500).json({ 
-        message: 'Sync failed: ' + (err.message || 'Internal logic error'), 
-        details: 'Payment recorded (' + paymentId + ') but membership could not be finalized. Please contact support.',
-        paymentId 
+    res.status(500).json({
+      message: 'Sync failed: ' + (err.message || 'Internal logic error'),
+      details: 'Payment recorded (' + paymentId + ') but membership could not be finalized. Please contact support.',
+      paymentId
     });
   } finally {
     session.endSession();
@@ -755,7 +785,7 @@ export const updateMembershipTrainer = asyncHandler(async (req, res) => {
 
     for (const session of upcomingSessions) {
       session.trainerId = trainerId || null;
-      if (trainerId) session.trainerStatus = 'accepted'; 
+      if (trainerId) session.trainerStatus = 'accepted';
       await session.save();
     }
   }
@@ -809,26 +839,26 @@ export const getMembershipByBookingId = asyncHandler(async (req, res) => {
 
   // Enrich generatedSessions with attendance status
   const atts = await Attendance.find({ membershipId: membership._id }).lean();
-  
+
   const mObj = membership.toObject();
   if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
     mObj.generatedSessions = mObj.generatedSessions.map(session => {
-        const att = atts.find(a => 
-            a.sessionId?.toString() === (session._id || session).toString()
-        );
-        
-        let displayStatus = 'scheduled';
-        if (att) {
-          displayStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
-        } else if (new Date(session.startTime) < new Date()) {
-          // If in the past and no attendance record, likely absent
-          displayStatus = 'not checked';
-        }
+      const att = atts.find(a =>
+        a.sessionId?.toString() === (session._id || session).toString()
+      );
 
-        return {
-            ...session,
-            status: displayStatus 
-        };
+      let displayStatus = 'scheduled';
+      if (att) {
+        displayStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
+      } else if (new Date(session.startTime) < new Date()) {
+        // If in the past and no attendance record, likely absent
+        displayStatus = 'not checked';
+      }
+
+      return {
+        ...session,
+        status: displayStatus
+      };
     });
   }
 
@@ -858,8 +888,8 @@ export const toggleFreeze = asyncHandler(async (req, res) => {
   if (membership.status === 'active') {
     // FREEZE
     if (membership.planId && !membership.planId.extensionRules?.allowFreezing && !isAdmin) {
-       res.status(400);
-       throw new Error('Your plan does not allow freezing. Please contact center.');
+      res.status(400);
+      throw new Error('Your plan does not allow freezing. Please contact center.');
     }
 
     membership.status = 'frozen';
@@ -868,24 +898,24 @@ export const toggleFreeze = asyncHandler(async (req, res) => {
       reason: reason || 'User requested pause',
       processedBy: req.user._id
     });
-    
+
     await membership.save();
     return res.json({ message: 'Membership frozen successfully', status: 'frozen' });
   } else if (membership.status === 'frozen') {
     // UNFREEZE
     const lastFreeze = membership.freezeHistory[membership.freezeHistory.length - 1];
     if (lastFreeze && !lastFreeze.endDate) {
-       lastFreeze.endDate = new Date();
-       
-       // Calculate Duration and extend membership end date
-       const diffTime = Math.abs(lastFreeze.endDate - lastFreeze.startDate);
-       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-       
-       if (diffDays > 0) {
-          const oldEnd = new Date(membership.endDate);
-          membership.endDate = new Date(oldEnd.setDate(oldEnd.getDate() + diffDays));
-          membership.previousEndDate = oldEnd;
-       }
+      lastFreeze.endDate = new Date();
+
+      // Calculate Duration and extend membership end date
+      const diffTime = Math.abs(lastFreeze.endDate - lastFreeze.startDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays > 0) {
+        const oldEnd = new Date(membership.endDate);
+        membership.endDate = new Date(oldEnd.setDate(oldEnd.getDate() + diffDays));
+        membership.previousEndDate = oldEnd;
+      }
     }
 
     membership.status = 'active';

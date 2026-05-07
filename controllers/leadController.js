@@ -1,5 +1,6 @@
 import asyncHandler from 'express-async-handler';
 import Lead from '../models/Lead.js';
+import { notifyAdmins } from '../utils/socketUtils.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const createLead = asyncHandler(async (req, res) => {
@@ -19,6 +20,8 @@ export const createLead = asyncHandler(async (req, res) => {
     message,
     locationId
   });
+
+  notifyAdmins(req, 'new_lead', { leadId: created._id });
 
   res.status(201).json(created);
 });

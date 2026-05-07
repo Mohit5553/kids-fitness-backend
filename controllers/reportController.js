@@ -10,12 +10,19 @@ import Child from '../models/Child.js';
 import Plan from '../models/Plan.js';
 import Trial from '../models/Trial.js';
 import Attendance from '../models/Attendance.js';
+import Invoice from '../models/Invoice.js';
+import Lead from '../models/Lead.js';
+import ExtensionRequest from '../models/ExtensionRequest.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
   const now = new Date();
   const locationId = resolveReadLocationId(req);
   const locationFilter = locationId ? { locationId } : {};
+
+  // Fetch fresh user to get latest seenAt timestamps
+  const currentUser = await User.findById(req.user._id).select('seenAt').lean();
+  const sa = currentUser?.seenAt || {};
 
   const [
     classCount,
@@ -25,7 +32,12 @@ export const getSummary = asyncHandler(async (req, res) => {
     userTotal,
     adminCount,
     membershipActive,
-    payments
+    payments,
+    pendingTrials,
+    pendingLeads,
+    pendingExtensions,
+    pendingPayments,
+    pendingBookings
   ] = await Promise.all([
     ClassModel.countDocuments(locationFilter),
     Trainer.countDocuments(locationFilter),
@@ -40,7 +52,32 @@ export const getSummary = asyncHandler(async (req, res) => {
     Payment.aggregate([
       ...(locationId ? [{ $match: { locationId } }] : []),
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-    ])
+    ]),
+    Trial.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.trials ? { createdAt: { $gt: sa.trials } } : {})
+    }),
+    Lead.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.leads ? { createdAt: { $gt: sa.leads } } : {})
+    }),
+    ExtensionRequest.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.extensions ? { createdAt: { $gt: sa.extensions } } : {})
+    }),
+    Payment.countDocuments({ 
+      ...locationFilter, 
+      status: 'pending', 
+      ...(sa.payments ? { createdAt: { $gt: sa.payments } } : {})
+    }),
+    Booking.countDocuments({
+      ...locationFilter,
+      status: 'pending',
+      ...(sa.bookings ? { createdAt: { $gt: sa.bookings } } : {})
+    })
   ]);
 
   const bookingSummary = bookingTotals.reduce(
@@ -65,7 +102,15 @@ export const getSummary = asyncHandler(async (req, res) => {
     },
     payments: {
       totalAmount: paymentSummary.total,
-      count: paymentSummary.count
+      count: paymentSummary.count,
+      pending: pendingPayments
+    },
+    pendingCounts: {
+      trials: pendingTrials,
+      leads: pendingLeads,
+      extensions: pendingExtensions,
+      bookings: pendingBookings,
+      payments: pendingPayments
     }
   });
 });
@@ -175,21 +220,19 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           .populate('processedBy', 'name')
           .sort({ date: -1 })
           .lean(),
-        Attendance.find({
+        Session.find({
           ...filter,
-          ...attendanceDateFilter,
-          membershipId: { $exists: true }
+          startTime: { $gte: sDate || new Date(0), $lte: eDate || new Date(9999, 11, 31) },
+          classType: 'Plan'
         })
-          .populate({
-            path: 'sessionId', populate: [
-              { path: 'trainerId', select: 'name' },
-              { path: 'classId', select: 'title' }
-            ]
+          .populate('trainerId', 'name')
+          .populate('classId', 'title')
+          .populate({ 
+            path: 'membershipId', 
+            populate: { path: 'userId', select: 'name email phone' }
           })
-          .populate('userId', 'name email phone')
-          .populate('childId', 'name')
-          .populate('membershipId', 'bookingNumber')
           .populate('locationId', 'name')
+          .sort({ startTime: -1 })
           .lean()
       ]);
 
@@ -202,20 +245,25 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       });
 
       // Enrich Membership Sessions
-      const sessions = membershipSessions.map(att => ({
-        _id: att._id,
-        bookingNumber: `MR-${att.membershipId?.bookingNumber || 'SESS'}-${att._id.toString().slice(-4).toUpperCase()}`,
-        userId: att.userId,
-        participants: att.childId ? [{ name: att.childId.name, childId: att.childId._id }] : [{ name: att.participantName || 'Unknown Student' }],
-        classId: att.sessionId?.classId || { title: 'Membership Session' },
-        sessionId: att.sessionId,
-        date: att.sessionId?.startTime || att.checkedInAt,
-        totalAmount: 0,
-        status: 'confirmed',
-        paymentStatus: 'completed',
-        method: att.method === 'qr' ? 'Member QR' : 'Member Manual',
-        locationId: att.locationId
-      })).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const now = new Date();
+      const sessions = membershipSessions.map(sess => {
+        const isUpcoming = new Date(sess.startTime) > now;
+        return {
+          _id: sess._id,
+          bookingNumber: sess.membershipId?.bookingNumber || 'N/A',
+          userId: sess.membershipId?.userId,
+          participants: sess.membershipId?.childId ? [{ name: sess.membershipId.childId.name }] : [{ name: 'N/A' }],
+          classId: sess.classId || { title: 'Membership Session' },
+          sessionId: { trainerId: sess.trainerId },
+          date: sess.startTime,
+          slotTiming: sess.startTime,
+          totalAmount: 0,
+          status: isUpcoming ? 'UPCOMING' : (sess.attendanceStatus === 'present' ? 'PRESENT' : 'PAST'),
+          paymentStatus: 'completed',
+          method: sess.attendanceStatus || 'scheduled',
+          locationId: sess.locationId
+        };
+      }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
       data = { purchases, sessions };
       break;
@@ -408,6 +456,64 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         ...Object.values(monthlyMap).map(m => ({ ...m, dateDisplay: new Date(m.date + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) })),
         ...Object.values(dailyMap).map(d => ({ ...d, dateDisplay: new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }))
       ].sort((a, b) => b.date.localeCompare(a.date));
+      break;
+    }
+
+    case 'detailed_sales': {
+      // Fetch invoices with all related data
+      const invoices = await Invoice.find({ ...filter, ...dateFilter, status: 'paid' })
+        .populate('userId', 'name email phone')
+        .populate('locationId', 'name')
+        .populate('bookingId', 'paymentMethod bookingNumber')
+        .sort({ date: -1 })
+        .lean();
+
+      const lineItems = [];
+      invoices.forEach(inv => {
+        const customerName = inv.userId?.name || inv.guestDetails?.name || 'Guest';
+        const customerEmail = inv.userId?.email || inv.guestDetails?.email || 'N/A';
+        const customerPhone = inv.userId?.phone || inv.guestDetails?.phone || 'N/A';
+        const location = inv.locationId?.name || 'N/A';
+        const rawMethod = inv.bookingId?.paymentMethod || 'N/A';
+        let paymentMode = rawMethod;
+        let paymentType = 'N/A';
+
+        if (rawMethod.toLowerCase().startsWith('center_') || rawMethod.toLowerCase() === 'center') {
+          paymentMode = 'CENTER';
+          paymentType = rawMethod.toLowerCase() === 'center' ? 'UNSPECIFIED' : rawMethod.replace('center_', '').toUpperCase();
+        } else if (rawMethod.toLowerCase() === 'online') {
+          paymentMode = 'WEBSITE';
+          paymentType = 'CARD/GATEWAY';
+        } else {
+          paymentMode = rawMethod.toUpperCase();
+        }
+        const bookingNumber = inv.bookingId?.bookingNumber || 'N/A';
+
+        const safeItems = Array.isArray(inv.items) ? inv.items : [];
+        
+        safeItems.forEach(item => {
+          lineItems.push({
+            location,
+            invoiceNumber: inv.invoiceNumber || 'N/A',
+            bookingNumber,
+            invoiceDate: inv.date,
+            customerName,
+            customerPhone,
+            customerEmail,
+            item: item.description || 'Service',
+            unitPrice: item.unitPrice || 0,
+            quantity: item.quantity || 1,
+            lineTotal: item.total || 0,
+            lineVat: item.taxAmount || 0,
+            discount: (inv.discountAmount || 0) + (inv.couponAmount || 0),
+            discountType: inv.couponCode ? `Coupon (${inv.couponCode})` : ((inv.discountAmount || 0) > 0 ? 'Promo' : 'None'),
+            totalAmount: inv.totalAmount || 0,
+            paymentMode,
+            paymentType
+          });
+        });
+      });
+      data = lineItems;
       break;
     }
 

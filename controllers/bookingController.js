@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import { notifyAdmins } from '../utils/socketUtils.js';
 import mongoose from 'mongoose';
 import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
@@ -29,8 +30,28 @@ export const getMyBookings = asyncHandler(async (req, res) => {
     .populate('classId', 'title price')
     .populate('planId', 'name price priceMonthly')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+    .populate('locationId', 'name')
     .sort({ createdAt: -1 });
   res.json(bookings);
+});
+
+export const getBookingSchedule = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const membership = await Membership.findOne({ bookingId: id })
+    .populate({
+      path: 'generatedSessions',
+      populate: [
+        { path: 'trainerId', select: 'name' },
+        { path: 'classId', select: 'title' }
+      ]
+    });
+
+  if (!membership) {
+    res.status(404);
+    throw new Error('Membership schedule not found for this booking');
+  }
+
+  res.json(membership.generatedSessions);
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
@@ -353,6 +374,7 @@ export const createBooking = asyncHandler(async (req, res) => {
   }
 
   const created = await Booking.create(bookingData);
+  notifyAdmins(req, 'new_booking', { bookingId: created._id });
 
   // COUPON REDEMPTION LOGIC
   if (req.body.couponCode) {
@@ -593,9 +615,49 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     if (booking.bookingType === 'package') {
       const MembershipModel = mongoose.model('Membership');
       const PlanModel = mongoose.model('Plan');
+      const SessionModel = mongoose.model('Session');
       const membership = await MembershipModel.findOne({ bookingId: booking._id });
       const plan = await PlanModel.findById(booking.planId);
+      
       if (membership && plan) {
+        // If rescueMissed is true, we remove them from past 'scheduled' sessions 
+        // and extend the membership to allow regeneration
+        if (req.body.rescueMissed) {
+          const now = new Date();
+          const missedSessions = await SessionModel.find({
+            _id: { $in: membership.generatedSessions || [] },
+            startTime: { $lt: now },
+            status: 'scheduled'
+          });
+
+          if (missedSessions.length > 0) {
+            const missedIds = missedSessions.map(s => s._id.toString());
+            
+            // 1. Decrement occupancy for missed sessions
+            await SessionModel.updateMany(
+              { _id: { $in: missedIds } },
+              { $inc: { bookedParticipants: -1 } }
+            );
+
+            // 2. Remove missed sessions from membership
+            membership.generatedSessions = (membership.generatedSessions || []).filter(
+              id => !missedIds.includes(id.toString())
+            );
+
+            // 3. Extend end date by the gap from start until now to compensate for missed time
+            const start = new Date(membership.startDate);
+            const gapDays = Math.ceil((now - start) / (1000 * 60 * 60 * 24));
+            if (gapDays > 0) {
+              membership.previousEndDate = membership.endDate;
+              const newEnd = new Date(membership.endDate);
+              newEnd.setDate(newEnd.getDate() + gapDays);
+              membership.endDate = newEnd;
+            }
+            
+            membership.notes = (membership.notes || '') + `\n[${now.toLocaleDateString()}] Auto-rescued ${missedSessions.length} missed sessions due to late payment confirmation.`;
+          }
+        }
+
         const { generateMembershipSessions } = await import('../services/schedulingService.js');
         const sessionIds = await generateMembershipSessions(membership, plan);
         membership.generatedSessions = [...new Set([...(membership.generatedSessions || []), ...sessionIds])];

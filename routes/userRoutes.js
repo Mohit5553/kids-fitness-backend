@@ -1,5 +1,5 @@
 import express from 'express';
-import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren, lookupUser, createWalkingCustomer, suggestUsers, adminUpdatePassword } from '../controllers/userController.js';
+import { getUsers, getUserById, updateUser, deleteUser, createStaff, getUserChildren, lookupUser, createWalkingCustomer, suggestUsers, adminUpdatePassword, updateLastViewed } from '../controllers/userController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -20,5 +20,6 @@ router.route('/:id')
 router.put('/:id/password', protect, adminOnly, adminUpdatePassword);
 
 router.get('/:id/children', protect, adminOnly, getUserChildren);
+router.put('/last-viewed/:category', protect, adminOnly, updateLastViewed);
 
 export default router;
