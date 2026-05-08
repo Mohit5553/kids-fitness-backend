@@ -53,7 +53,8 @@ const bookingSchema = new mongoose.Schema(
     taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
     taxAmount: { type: Number, default: 0 },
     couponCode: { type: String },
-    couponAmount: { type: Number, default: 0 }
+    couponAmount: { type: Number, default: 0 },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

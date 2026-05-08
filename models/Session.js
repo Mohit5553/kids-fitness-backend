@@ -20,7 +20,8 @@ const sessionSchema = new mongoose.Schema(
     attendanceStatus: { type: String, enum: ['booked', 'present', 'absent'], default: 'booked' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     isManual: { type: Boolean, default: false },
-    trainerReminderSent: { type: Boolean, default: false }
+    trainerReminderSent: { type: Boolean, default: false },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

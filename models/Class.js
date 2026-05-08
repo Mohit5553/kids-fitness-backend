@@ -14,7 +14,8 @@ const classSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     imageUrl: { type: String },
     taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
-    status: { type: String, enum: ['active', 'inactive'], default: 'active' }
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

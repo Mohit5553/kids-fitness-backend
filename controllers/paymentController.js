@@ -10,9 +10,10 @@ import { toCsv } from '../utils/csv.js';
 import { resolveReadLocationIds } from '../utils/locationScope.js';
 import { sendPaymentConfirmationEmail } from '../utils/mailer.js';
 import { linkUserBookings } from './bookingController.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 // Internal function to heal missing Payment records for any confirmed bookings
-const syncPayments = async (user = null) => {
+const syncPayments = async (user = null, req = {}) => {
   try {
     // 1. If user provided, run their guest linkage/healing first
     if (user) {
@@ -20,10 +21,10 @@ const syncPayments = async (user = null) => {
     }
 
     // 0. Data Repair: Ensure existing healed payments have planId and locationId (enables cleanup and visibility)
-    const incomplete = await Payment.find({
+    const incomplete = await Payment.find(withUAT(req, {
       bookingId: { $exists: true },
       $or: [{ planId: { $exists: false } }, { locationId: null }]
-    }).populate('bookingId');
+    })).populate('bookingId');
     for (const p of incomplete) {
       let changed = false;
       if (!p.planId && p.bookingId?.planId) {
@@ -38,20 +39,19 @@ const syncPayments = async (user = null) => {
     }
 
     // 2. Global Healing: Find ANY confirmed booking since March 24 missing a Payment record
-    // Using March 1st as a safe "recent" margin
     const startDate = new Date('2026-03-01'); 
-    const missingBookings = await Booking.find({
+    const missingBookings = await Booking.find(withUAT(req, {
       createdAt: { $gte: startDate }
-    });
+    }));
 
     for (const b of missingBookings) {
       // Heal Payment records
-      let exists = await Payment.findOne({ 
+      let exists = await Payment.findOne(withUAT(req, { 
         $or: [
           { bookingId: b._id },
           { groupId: b.groupId }
         ].filter(cond => cond.groupId !== undefined || cond.bookingId !== undefined)
-      });
+      }));
 
       // 2. Heal Orphaned Plan Payments (Walking Bookings)
       if (!exists && b.bookingType === 'package' && b.planId) {
@@ -59,13 +59,13 @@ const syncPayments = async (user = null) => {
         const timeLimit = new Date(b.createdAt);
         timeLimit.setHours(timeLimit.getHours() - 1);
         
-        exists = await Payment.findOne({
+        exists = await Payment.findOne(withUAT(req, {
           userId: b.userId,
           planId: b.planId,
           amount: b.totalAmount,
           bookingId: { $exists: false },
           createdAt: { $gte: timeLimit, $lte: new Date(b.createdAt.getTime() + 3600000) }
-        });
+        }));
 
         if (exists) {
           exists.bookingId = b._id;
@@ -84,8 +84,11 @@ const syncPayments = async (user = null) => {
           amount: b.totalAmount,
           paymentMethod: b.paymentMethod || 'online',
           status: b.paymentStatus === 'completed' ? 'paid' : 'pending',
-          locationId: b.locationId, planId: b.planId, membershipUnits: b.membershipUnits || 1,
-          createdAt: b.createdAt
+          locationId: b.locationId, 
+          planId: b.planId, 
+          membershipUnits: b.membershipUnits || 1,
+          createdAt: b.createdAt,
+          isUAT: b.isUAT || false
         });
       } else if (exists.status === 'pending') {
         exists.status = 'paid';
@@ -93,7 +96,7 @@ const syncPayments = async (user = null) => {
       }
 
       // Heal Invoice records: Ensure confirmed bookings have 'paid' invoices
-      const invoiceRec = await Invoice.findOne({ bookingId: b._id });
+      const invoiceRec = await Invoice.findOne(withUAT(req, { bookingId: b._id }));
       if (invoiceRec && invoiceRec.status === 'unpaid') {
         invoiceRec.status = 'paid';
         await invoiceRec.save();
@@ -157,13 +160,27 @@ export const getMyPayments = asyncHandler(async (req, res) => {
   res.json(withInvoices);
 });
 
-export const getAllPayments = asyncHandler(async (req, res) => {
-  // Run global sync/healing for admin view
-  await syncPayments();
+export const getPayments = asyncHandler(async (req, res) => {
+  const { locationId: queryLocationId, startDate, endDate, all } = req.query;
 
-  const locationIds = resolveReadLocationIds(req);
-  const filter = locationIds ? { locationId: { $in: locationIds } } : {};
-  const payments = await Payment.find(filter)
+  // 1. Sync/Heal before fetching
+  await syncPayments(null, req);
+  
+  const locationIds = (queryLocationId && queryLocationId !== 'all') ? [queryLocationId] : resolveReadLocationIds(req);
+  
+  const filter = {};
+  if (locationIds && locationIds.length > 0) {
+    filter.locationId = { $in: locationIds };
+  }
+  
+  if (startDate && endDate) {
+    filter.createdAt = {
+      $gte: new Date(startDate),
+      $lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
+    };
+  }
+
+  const payments = await Payment.find(withUAT(req, filter))
     .populate('userId', 'name email')
     .populate({
       path: 'bookingId',
@@ -182,7 +199,41 @@ export const getAllPayments = asyncHandler(async (req, res) => {
   const withInvoices = await Promise.all(payments.map(async (p) => {
     const pObj = p.toObject();
     if (p.bookingId) {
-      const inv = await Invoice.findOne({ bookingId: p.bookingId._id }).select('invoiceNumber status amount');
+      const inv = await Invoice.findOne(withUAT(req, { bookingId: p.bookingId._id })).select('invoiceNumber status amount');
+      pObj.invoice = inv;
+    }
+    return pObj;
+  }));
+
+  res.json(withInvoices);
+});
+
+export const getAllPayments = asyncHandler(async (req, res) => {
+  // Run global sync/healing for admin view
+  await syncPayments(null, req);
+
+  const locationIds = resolveReadLocationIds(req);
+  const filter = locationIds ? { locationId: { $in: locationIds } } : {};
+  const payments = await Payment.find(withUAT(req, filter))
+    .populate('userId', 'name email')
+    .populate({
+      path: 'bookingId',
+      populate: [
+        { path: 'classId', select: 'title price' },
+        { path: 'sessionId', select: 'startTime endTime' }
+      ]
+    })
+    .populate('planId', 'name price')
+    .populate({
+      path: 'membershipId',
+      populate: { path: 'planId', select: 'name' }
+    })
+    .sort({ createdAt: -1 });
+
+  const withInvoices = await Promise.all(payments.map(async (p) => {
+    const pObj = p.toObject();
+    if (p.bookingId) {
+      const inv = await Invoice.findOne(withUAT(req, { bookingId: p.bookingId._id })).select('invoiceNumber status amount');
       pObj.invoice = inv;
     }
     return pObj;

@@ -190,6 +190,30 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
           }
         }
 
+        // 5. Session Restorer: If sessions are missing but preferences exist, re-generate them
+        if ((!m.generatedSessions || m.generatedSessions.length === 0) && m.preferredDays && m.preferredDays.length > 0 && m.status === 'active') {
+          console.log(`[Session Restorer] Restoring missing sessions for membership ${m._id}`);
+          const plan = await mongoose.model('Plan').findById(m.planId);
+          if (plan) {
+            const newSessionIds = await generateMembershipSessions(m, plan, null, true);
+            m.generatedSessions = newSessionIds;
+            saved = true;
+          }
+        }
+
+        // 6. Attendance Status Healer: Change 'booked' to 'pending' for consistency
+        if (m.generatedSessions && m.generatedSessions.length > 0) {
+          const Session = mongoose.model('Session');
+          const result = await Session.updateMany(
+            { _id: { $in: m.generatedSessions }, attendanceStatus: 'booked' },
+            { $set: { attendanceStatus: 'pending' } }
+          );
+          if (result.modifiedCount > 0) {
+            console.log(`[Status Healer] Healed ${result.modifiedCount} sessions for membership ${m._id}`);
+            saved = true;
+          }
+        }
+
         if (saved) await m.save();
       } catch (innerError) {
         console.error(`[getMyMemberships] Error healing membership ${m._id}:`, innerError.message);
@@ -216,6 +240,12 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
       ]
     }).lean();
 
+    // FETCH RESCHEDULE REQUESTS
+    const resRequests = await ExtensionRequest.find({
+      membershipId: { $in: mIds },
+      type: 'reschedule'
+    }).lean();
+
     // Transform memberships to include attendanceStatus in each generatedSession and overall counts
     const finalMemberships = await Promise.all(healedMemberships.map(async (m) => {
       const mObj = m.toObject();
@@ -224,15 +254,27 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
         (m.bookingId?._id?.toString() === a.bookingId?.toString() && a.bookingId)
       );
       
+      const membershipResReqs = resRequests.filter(r => r.membershipId.toString() === m._id.toString());
+      
       mObj.attendedCount = membershipAtts.filter(a => ['present', 'late'].includes(a.status)).length;
-      mObj.absentCount = membershipAtts.filter(a => a.status === 'absent').length;
+      
+      // Count as absent if explicitly marked absent OR if session is in the past and still pending
+      const now = new Date();
+      let calculatedAbsent = membershipAtts.filter(a => a.status === 'absent').length;
+      
+      if (mObj.generatedSessions) {
+        const pastUnmarked = mObj.generatedSessions.filter(s => {
+          const isPast = new Date(s.startTime) < now;
+          const hasAtt = membershipAtts.some(a => a.sessionId?.toString() === s._id.toString());
+          return isPast && !hasAtt && s.attendanceStatus === 'pending';
+        }).length;
+        calculatedAbsent += pastUnmarked;
+      }
+      
+      mObj.absentCount = calculatedAbsent;
 
       // Count approved reschedules
-      mObj.rescheduleCount = await ExtensionRequest.countDocuments({
-        membershipId: m._id,
-        type: 'reschedule',
-        status: 'approved'
-      });
+      mObj.rescheduleCount = membershipResReqs.filter(r => r.status === 'approved').length;
       mObj.maxReschedules = m.planId?.extensionRules?.maxAllowedMissed || 0;
 
       if (mObj.generatedSessions && mObj.generatedSessions.length > 0) {
@@ -241,14 +283,21 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
             a.sessionId?.toString() === session._id.toString()
           );
 
-          let attendanceStatus = 'pending'; // Default
+          const resReq = membershipResReqs.find(r => 
+            r.sessionId?.toString() === session._id.toString() || 
+            r.originalSessionId?.toString() === session._id.toString() ||
+            r.targetSessionId?.toString() === session._id.toString()
+          );
+
+          let attendanceStatus = session.attendanceStatus || 'pending'; 
           if (att) {
             attendanceStatus = (att.status === 'present' || att.status === 'late') ? 'present' : 'absent';
           }
 
           return {
             ...session,
-            attendanceStatus
+            attendanceStatus,
+            rescheduleRequestStatus: resReq ? resReq.status : null
           };
         });
       }
@@ -624,13 +673,13 @@ export const createMembership = asyncHandler(async (req, res) => {
       participants
     }], { session });
 
-    notifyAdmins(req, 'new_booking', { 
-      bookingId: bookingRec._id, 
-      locationId: bookingRec.locationId 
+    notifyAdmins(req, 'new_booking', {
+      bookingId: bookingRec._id,
+      locationId: bookingRec.locationId
     });
-    notifyAdmins(req, 'new_payment', { 
-      bookingId: bookingRec._id, 
-      locationId: bookingRec.locationId 
+    notifyAdmins(req, 'new_payment', {
+      bookingId: bookingRec._id,
+      locationId: bookingRec.locationId
     });
 
     primaryMembership.bookingId = bookingRec._id;

@@ -4,26 +4,32 @@ import Promotion from '../models/Promotion.js';
 import Session from '../models/Session.js';
 import Membership from '../models/Membership.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getPlans = asyncHandler(async (req, res) => {
-  const { locationId: queryLocationId } = req.query;
+  const { locationId: queryLocationId, all } = req.query;
   const locationId = queryLocationId || resolveReadLocationId(req);
   
   // Show plans for the specific location OR global plans (locationId: null)
-  const filter = (locationId && locationId !== 'all') ? { $or: [{ locationId }, { locationId: null }] } : {};
+  let filter = (locationId && locationId !== 'all') ? { $or: [{ locationId }, { locationId: null }] } : {};
   
-  const plans = await Plan.find(filter)
+  // If not 'all=true' (public view), only show active plans
+  if (all !== 'true') {
+    filter.status = 'active';
+  }
+  
+  const plans = await Plan.find(withUAT(req, filter))
     .populate('locationId', 'name')
     .populate('trainerId', 'name avatarUrl')
     .sort({ createdAt: -1 });
 
   // Fetch active promotions
   const now = new Date();
-  const activePromos = await Promotion.find({
+  const activePromos = await Promotion.find(withUAT(req, {
     isActive: true,
     startDate: { $lte: now },
     endDate: { $gte: now }
-  }).lean();
+  })).lean();
 
   // Attach promotions to each plan
   const plansWithPromos = plans.map(p => {
@@ -93,7 +99,8 @@ export const createPlan = asyncHandler(async (req, res) => {
     benefits, type, classesIncluded, 
     durationWeeks: finalDurationWeeks, durationValue, durationUnit,
     billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
-    trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId 
+    trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId,
+    isUAT: req.isUAT || false
   });
   res.status(201).json(created);
 });
@@ -157,6 +164,18 @@ export const updatePlan = asyncHandler(async (req, res) => {
   }
 
   res.json(saved);
+});
+
+export const setPlanStatus = asyncHandler(async (req, res) => {
+  const plan = await Plan.findById(req.params.id);
+  if (!plan) {
+    res.status(404);
+    throw new Error('Plan not found');
+  }
+
+  plan.status = req.body.status || (plan.status === 'active' ? 'inactive' : 'active');
+  await plan.save();
+  res.json(plan);
 });
 
 export const deletePlan = asyncHandler(async (req, res) => {

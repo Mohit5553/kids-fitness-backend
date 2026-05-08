@@ -19,14 +19,15 @@ import Promotion from '../models/Promotion.js';
 import Tax from '../models/Tax.js';
 import { calculateTax } from '../utils/taxCalculator.js';
 import Coupon from '../models/Coupon.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getMyBookings = asyncHandler(async (req, res) => {
-  const bookings = await Booking.find({
+  const bookings = await Booking.find(withUAT(req, {
     $or: [
       { userId: req.user._id },
       { 'guestDetails.email': req.user.email }
     ]
-  })
+  }))
     .populate('classId', 'title price')
     .populate('planId', 'name price priceMonthly')
     .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
@@ -51,7 +52,29 @@ export const getBookingSchedule = asyncHandler(async (req, res) => {
     throw new Error('Membership schedule not found for this booking');
   }
 
-  res.json(membership.generatedSessions);
+  // FETCH ATTENDANCE DATA
+  const atts = await Attendance.find({ membershipId: membership._id }).lean();
+  
+  const now = new Date();
+  const enrichedSessions = (membership.generatedSessions || []).map(session => {
+    const sObj = session.toObject ? session.toObject() : { ...session };
+    const att = atts.find(a => a.sessionId?.toString() === sObj._id.toString());
+    
+    let attendanceStatus = sObj.attendanceStatus || 'pending';
+    if (att) {
+      attendanceStatus = (att.status === 'present' || att.status === 'completed') ? 'present' : 'absent';
+    } else if (new Date(sObj.startTime) < now) {
+      // If past and no attendance, it's considered absent
+      attendanceStatus = 'absent';
+    }
+
+    return {
+      ...sObj,
+      attendanceStatus
+    };
+  });
+
+  res.json(enrichedSessions);
 });
 
 export const getAllBookings = asyncHandler(async (req, res) => {
@@ -78,7 +101,7 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     filter.sessionId = { $in: trainerSessionIds };
   }
 
-  const bookings = await Booking.find(filter)
+  const bookings = await Booking.find(withUAT(req, filter))
     .populate('userId', 'name email')
     .populate('processedBy', 'name email')
     .populate('classId', 'title price')
@@ -232,10 +255,10 @@ export const createBooking = asyncHandler(async (req, res) => {
     const bookingUserRole = (req.user?.role || '').toLowerCase().replace(/[\s_-]/g, '');
     const isStaffBooking = ['admin', 'manager', 'cashier'].some(r => bookingUserRole.includes(r));
 
-    const liveBookedCount = await mongoose.model('Booking').countDocuments({
+    const liveBookedCount = await mongoose.model('Booking').countDocuments(withUAT(req, {
       sessionId: session._id,
       status: { $ne: 'cancelled' }
-    });
+    }));
 
     const remainingCapacity = session.capacity - liveBookedCount;
     if (participants.length > remainingCapacity && !isStaffBooking) {
@@ -248,14 +271,14 @@ export const createBooking = asyncHandler(async (req, res) => {
 
     const targetUserIdForLimit = userId || req.user?._id;
     if (targetUserIdForLimit && !isStaffBooking) {
-      const activeMembership = await Membership.findOne({
+      const activeMembership = await Membership.findOne(withUAT(req, {
         userId: targetUserIdForLimit,
         status: 'active',
         $or: [
           { childId: { $in: participants.map(p => p.childId).filter(Boolean) } },
           { childId: null }
         ]
-      }).populate('planId');
+      })).populate('planId');
 
       if (activeMembership && activeMembership.planId?.dailyBookingLimit > 0) {
         const startOfDay = new Date(resolvedDate);
@@ -263,11 +286,11 @@ export const createBooking = asyncHandler(async (req, res) => {
         const endOfDay = new Date(resolvedDate);
         endOfDay.setHours(23, 59, 59, 999);
 
-        const dailyCounts = await Booking.countDocuments({
+        const dailyCounts = await Booking.countDocuments(withUAT(req, {
           userId: targetUserIdForLimit,
           date: { $gte: startOfDay, $lte: endOfDay },
           status: { $ne: 'cancelled' }
-        });
+        }));
 
         if (dailyCounts + participants.length > activeMembership.planId.dailyBookingLimit) {
           res.status(400);
@@ -275,11 +298,10 @@ export const createBooking = asyncHandler(async (req, res) => {
         }
       }
 
-    }
-
-    if (activeMembership && activeMembership.status === 'frozen') {
-      res.status(400);
-      throw new Error('Your membership is currently frozen. Please unfreeze it to book classes.');
+      if (activeMembership && activeMembership.status === 'frozen') {
+        res.status(400);
+        throw new Error('Your membership is currently frozen. Please unfreeze it to book classes.');
+      }
     }
 
     // DUPLICATE BOOKING CHECK
@@ -300,7 +322,7 @@ export const createBooking = asyncHandler(async (req, res) => {
     }
 
     if (duplicateFilter.$or.length > 0) {
-      const existingBooking = await Booking.findOne(duplicateFilter);
+      const existingBooking = await Booking.findOne(withUAT(req, duplicateFilter));
       if (existingBooking) {
         res.status(400);
         throw new Error('One or more participants are already booked for this session.');
@@ -353,7 +375,8 @@ export const createBooking = asyncHandler(async (req, res) => {
     promotionId,
     discountAmount: discountAmount || 0,
     couponCode: req.body.couponCode,
-    couponAmount: req.body.couponAmount || 0
+    couponAmount: req.body.couponAmount || 0,
+    isUAT: req.isUAT || false
   };
 
   if (req.user) {

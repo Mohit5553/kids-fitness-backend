@@ -4,28 +4,29 @@ import Plan from '../models/Plan.js';
 import Promotion from '../models/Promotion.js';
 import mongoose from 'mongoose';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getClasses = asyncHandler(async (req, res) => {
   const { locationId: queryLocationId, all } = req.query;
   const locationId = queryLocationId || resolveReadLocationId(req);
   
-  const filter = (locationId && locationId !== 'all') ? { locationId } : {};
+  let filter = (locationId && locationId !== 'all') ? { locationId } : {};
   if (all !== 'true') {
     filter.status = 'active';
   }
 
-  // Fetch classes
-  const classes = await ClassModel.find(filter)
+  // Fetch classes with environment isolation
+  const classes = await ClassModel.find(withUAT(req, filter))
     .populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery')
     .sort({ createdAt: -1 });
 
   // Fetch active promotions
   const now = new Date();
-  const activePromos = await Promotion.find({
+  const activePromos = await Promotion.find(withUAT(req, {
     isActive: true,
     startDate: { $lte: now },
     endDate: { $gte: now }
-  }).lean();
+  })).lean();
 
   // Attach promotions to each class
   const classesWithPromos = classes.map(c => {
@@ -54,8 +55,14 @@ export const getClasses = asyncHandler(async (req, res) => {
 
 export const getClassById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
-  const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
-  const classItem = await ClassModel.findOne(filter).populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery');
+  let filter = { _id: req.params.id };
+  if (locationId && locationId !== 'all') {
+    filter.locationId = locationId;
+  }
+  
+  const classItem = await ClassModel.findOne(withUAT(req, filter))
+    .populate('availableTrainers', 'name status locationIds bio specialties avatarUrl gallery');
+    
   if (!classItem) {
     res.status(404);
     throw new Error('Class not found');
@@ -83,7 +90,8 @@ export const createClass = asyncHandler(async (req, res) => {
     price,
     capacity,
     imageUrl,
-    locationId
+    locationId,
+    isUAT: req.isUAT || false
   });
   res.status(201).json(created);
 });
