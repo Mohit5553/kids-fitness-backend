@@ -7,7 +7,7 @@ import Session from '../models/Session.js';
  * @param {Object} [dbSession] - Optional Mongoose session for atomic transactions
  * @returns {Array} List of created session IDs
  */
-export const generateMembershipSessions = async (membership, plan, dbSession = null) => {
+export const generateMembershipSessions = async (membership, plan, dbSession = null, forcePast = false) => {
     const { startDate, endDate, preferredDays, preferredSlots, sessionsPerWeek, childId, locationId } = membership;
     const { classesIncluded, sessionType } = plan;
 
@@ -78,8 +78,8 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                 const isInitialToday = currentDate.toDateString() === new Date().toDateString() && currentDate.toDateString() === new Date(startDate).toDateString();
                 const gracePeriodMs = isInitialToday ? 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000; 
 
-                if (sessionDate.getTime() + gracePeriodMs < new Date().getTime()) {
-                    // Skip if already passed significantly
+                if (!forcePast && (sessionDate.getTime() + gracePeriodMs < new Date().getTime())) {
+                    // Skip if already passed significantly (unless forced)
                 } else {
                     const effectiveLocationId = locationId || plan.locationId || membership.locationId;
 

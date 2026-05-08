@@ -53,24 +53,24 @@ export const getSummary = asyncHandler(async (req, res) => {
       ...(locationId ? [{ $match: { locationId } }] : []),
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
-    Trial.countDocuments({ 
-      ...locationFilter, 
-      status: 'pending', 
+    Trial.countDocuments({
+      ...locationFilter,
+      status: 'pending',
       ...(sa.trials ? { createdAt: { $gt: sa.trials } } : {})
     }),
-    Lead.countDocuments({ 
-      ...locationFilter, 
-      status: 'pending', 
+    Lead.countDocuments({
+      ...locationFilter,
+      status: 'pending',
       ...(sa.leads ? { createdAt: { $gt: sa.leads } } : {})
     }),
-    ExtensionRequest.countDocuments({ 
-      ...locationFilter, 
-      status: 'pending', 
+    ExtensionRequest.countDocuments({
+      ...locationFilter,
+      status: 'pending',
       ...(sa.extensions ? { createdAt: { $gt: sa.extensions } } : {})
     }),
-    Payment.countDocuments({ 
-      ...locationFilter, 
-      status: 'pending', 
+    Payment.countDocuments({
+      ...locationFilter,
+      status: 'pending',
       ...(sa.payments ? { createdAt: { $gt: sa.payments } } : {})
     }),
     Booking.countDocuments({
@@ -227,8 +227,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         })
           .populate('trainerId', 'name')
           .populate('classId', 'title')
-          .populate({ 
-            path: 'membershipId', 
+          .populate({
+            path: 'membershipId',
             populate: { path: 'userId', select: 'name email phone' }
           })
           .populate('locationId', 'name')
@@ -475,22 +475,25 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         const customerPhone = inv.userId?.phone || inv.guestDetails?.phone || 'N/A';
         const location = inv.locationId?.name || 'N/A';
         const rawMethod = inv.bookingId?.paymentMethod || 'N/A';
-        let paymentMode = rawMethod;
-        let paymentType = 'N/A';
+        let paymentSource = 'N/A';
+        let paymentMode = 'N/A';
 
-        if (rawMethod.toLowerCase().startsWith('center_') || rawMethod.toLowerCase() === 'center') {
-          paymentMode = 'CENTER';
-          paymentType = rawMethod.toLowerCase() === 'center' ? 'UNSPECIFIED' : rawMethod.replace('center_', '').toUpperCase();
-        } else if (rawMethod.toLowerCase() === 'online') {
-          paymentMode = 'WEBSITE';
-          paymentType = 'CARD/GATEWAY';
+        if (rawMethod.toLowerCase().includes('online') || rawMethod.toLowerCase().includes('website')) {
+          paymentSource = 'WEBSITE';
+          paymentMode = 'ONLINE';
         } else {
-          paymentMode = rawMethod.toUpperCase();
+          paymentSource = 'CENTER';
+          let cleaned = rawMethod.toLowerCase()
+            .replace('center_', '')
+            .replace('pay_at_', '')
+            .replace('pay_at', '')
+            .trim();
+          paymentMode = (cleaned === 'center' || !cleaned) ? 'CASH' : cleaned.toUpperCase();
         }
         const bookingNumber = inv.bookingId?.bookingNumber || 'N/A';
 
         const safeItems = Array.isArray(inv.items) ? inv.items : [];
-        
+
         safeItems.forEach(item => {
           lineItems.push({
             location,
@@ -508,8 +511,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
             discount: (inv.discountAmount || 0) + (inv.couponAmount || 0),
             discountType: inv.couponCode ? `Coupon (${inv.couponCode})` : ((inv.discountAmount || 0) > 0 ? 'Promo' : 'None'),
             totalAmount: inv.totalAmount || 0,
-            paymentMode,
-            paymentType
+            paymentSource,
+            paymentMode
           });
         });
       });

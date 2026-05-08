@@ -30,7 +30,8 @@ const membershipSchema = new mongoose.Schema(
     membershipUnits: { type: Number, default: 1 },
     previousEndDate: { type: Date }, // Stores the old end date when extended
     remindedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }],
-    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

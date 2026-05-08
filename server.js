@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { uatDetector } from './middleware/uatMiddleware.js';
 dotenv.config();
 if (!process.env.JWT_SECRET) {
   console.error('FATAL ERROR: JWT_SECRET is not defined in .env file!');
@@ -42,6 +43,7 @@ import promotionRoutes from './routes/promotionRoutes.js';
 import taxRoutes from './routes/taxRoutes.js';
 import couponRoutes from './routes/couponRoutes.js';
 import leadRoutes from './routes/leadRoutes.js';
+import uatRoutes from './routes/uatRoutes.js';
 import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
@@ -79,6 +81,7 @@ app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
 app.use(morgan('dev'));
+app.use(uatDetector);
 app.use(locationMiddleware);
 
 const __dirname = path.resolve();
@@ -112,6 +115,7 @@ app.use('/api/promotions', promotionRoutes);
 app.use('/api/taxes', taxRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/leads', leadRoutes);
+app.use('/api/uat', uatRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

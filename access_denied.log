@@ -1,0 +1,60 @@
+
+[2026-05-08T06:40:56.871Z] ACCESS DENIED
+URL BookingId: 69f2f7e1a48a086b77d17145
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69ca78e1835e9ea067d940f0
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------
+
+[2026-05-08T06:40:57.929Z] ACCESS DENIED
+URL BookingId: 69f2f7e1a48a086b77d17145
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69ca78e1835e9ea067d940f0
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------
+
+[2026-05-08T06:41:03.524Z] ACCESS DENIED
+URL BookingId: 69f2f7e1a48a086b77d17145
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69ca78e1835e9ea067d940f0
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------
+
+[2026-05-08T06:41:04.829Z] ACCESS DENIED
+URL BookingId: 69f2f7e1a48a086b77d17145
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69ca78e1835e9ea067d940f0
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------
+
+[2026-05-08T06:41:12.927Z] ACCESS DENIED
+URL BookingId: 69f30194a62f1fee7498e128
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69d7599088d80004abc3545a
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------
+
+[2026-05-08T06:41:14.411Z] ACCESS DENIED
+URL BookingId: 69f30194a62f1fee7498e128
+User: 69ae5116b8047c9e24d9a57e (aniket6616@gmail.com)
+Role: customer
+Booking Owner: 69d7599088d80004abc3545a
+Booking Guest: undefined
+isBookingOwner: false
+isInvoiceOwner: false
+----------------------------------------------

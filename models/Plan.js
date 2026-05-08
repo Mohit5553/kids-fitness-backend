@@ -31,7 +31,9 @@ const planSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     trainerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' },
     taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
-    gender: { type: String, enum: ['male', 'female', 'mixed'], default: 'mixed' }
+    gender: { type: String, enum: ['male', 'female', 'mixed'], default: 'mixed' },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

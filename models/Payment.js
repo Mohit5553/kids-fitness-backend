@@ -19,7 +19,8 @@ const paymentSchema = new mongoose.Schema(
     couponCode: { type: String },
     couponAmount: { type: Number, default: 0 },
     membershipUnits: { type: Number, default: 1 },
-    processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

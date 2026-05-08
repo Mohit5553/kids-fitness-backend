@@ -28,7 +28,8 @@ const invoiceSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     discountAmount: { type: Number, default: 0 },
     couponAmount: { type: Number, default: 0 },
-    couponCode: { type: String }
+    couponCode: { type: String },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );
