@@ -240,8 +240,7 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
     }
   }
 
-  // --- [FINAL RESILIENCE ACCESS CHECK] ---
-  // Fetch booking directly to be 100% sure of ownership
+  // --- [ACCESS CHECK] ---
   const rawBooking = await Booking.findById(req.params.bookingId).lean();
   if (!rawBooking) {
     res.status(404);
@@ -263,41 +262,19 @@ export const getInvoiceByBookingId = asyncHandler(async (req, res) => {
   const userEmail = req.user.email?.toLowerCase();
   const currentUserId = req.user._id.toString();
 
-  // --- [DIAGNOSTIC BYPASS] ---
-  if (req.params.bookingId === '69fc3a6a33f8580dfc0b2190') {
-    return res.json(invoice);
-  }
-
   const isBookingOwner = (rawBooking.userId && rawBooking.userId.toString() === currentUserId) ||
                          (userEmail && rawBooking.guestDetails?.email?.toLowerCase() === userEmail);
                          
-  // Also check invoice-specific ownership if it differs
   const invoiceUserId = invoice.userId?._id?.toString() || invoice.userId?.toString();
   const isInvoiceOwner = (invoiceUserId && invoiceUserId === currentUserId) ||
                          (userEmail && invoice.guestDetails?.email?.toLowerCase() === userEmail);
 
-  if (isBookingOwner || isInvoiceOwner) {
-    // Access Granted
-  } else {
-    const fs = await import('fs');
-    const logData = `
-[${new Date().toISOString()}] ACCESS DENIED
-URL BookingId: ${req.params.bookingId}
-User: ${currentUserId} (${req.user.email})
-Role: ${req.user.role}
-Booking Owner: ${rawBooking.userId?.toString()}
-Booking Guest: ${rawBooking.guestDetails?.email}
-isBookingOwner: ${isBookingOwner}
-isInvoiceOwner: ${isInvoiceOwner}
-----------------------------------------------
-`;
-    fs.appendFileSync('access_denied.log', logData);
-    
+  if (!isBookingOwner && !isInvoiceOwner) {
     res.status(403);
     throw new Error('Not authorized to view this invoice');
   }
 
-  // HEALING LOGIC: Sync invoice status with booking status (handles historical mismatches)
+  // HEALING LOGIC: Sync invoice status with booking status
   if (invoice.bookingId && ['cancelled', 'refunded'].includes(invoice.bookingId.status) && invoice.status === 'paid') {
     invoice.status = 'cancelled';
     await invoice.save();
