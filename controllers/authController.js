@@ -30,7 +30,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     throw new Error('Name, email, and password are required');
   }
 
-  const existing = await User.findOne({ email });
+  const existing = await User.findOne({ email, isUAT: req.isUAT || false });
   if (existing) {
     res.status(400);
     throw new Error('User already exists');
@@ -57,7 +57,8 @@ export const registerUser = asyncHandler(async (req, res) => {
     city,
     country,
     avatarUrl,
-    role: 'customer' // Force customer role for public registration
+    role: 'customer', // Force customer role for public registration
+    isUAT: req.isUAT || false
   });
 
   // Create children if provided
@@ -125,7 +126,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     throw new Error('Email and password are required');
   }
 
-  const user = await User.findOne({ email });
+  const user = await User.findOne({ email, isUAT: req.isUAT || false });
   if (!user) {
     res.status(401);
     throw new Error('Invalid credentials');
@@ -180,7 +181,7 @@ export const getMe = asyncHandler(async (req, res) => {
 
   if (user.role === 'superadmin') {
     permissions = ['*'];
-  } else {
+  } else if (user.role) {
     const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${user.role}$`, 'i') }, status: 'active' });
     permissions = roleDoc ? roleDoc.permissions || [] : [];
   }

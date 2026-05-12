@@ -4,9 +4,10 @@ import Booking from '../models/Booking.js';
 import Session from '../models/Session.js';
 import { verifyQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getMyAttendance = asyncHandler(async (req, res) => {
-  const attendance = await Attendance.find({ userId: req.user._id })
+  const attendance = await Attendance.find(withUAT(req, { userId: req.user._id }))
     .populate('childId', 'name age')
     .populate({
       path: 'sessionId',
@@ -22,7 +23,7 @@ export const getMyAttendance = asyncHandler(async (req, res) => {
 export const getAllAttendance = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
-  const attendance = await Attendance.find(filter)
+  const attendance = await Attendance.find(withUAT(req, filter))
     .populate('userId', 'name email')
     .populate('childId', 'name age')
     .populate({
@@ -46,7 +47,7 @@ export const checkIn = asyncHandler(async (req, res) => {
   let resolvedLocationId = null;
 
   if (bookingId) {
-    const booking = await Booking.findById(bookingId);
+    const booking = await Booking.findOne(withUAT(req, { _id: bookingId }));
     if (!booking) {
       res.status(404);
       throw new Error('Booking not found');
@@ -62,7 +63,7 @@ export const checkIn = asyncHandler(async (req, res) => {
   }
 
   if (!resolvedLocationId) {
-    const session = await Session.findById(resolvedSessionId);
+    const session = await Session.findOne(withUAT(req, { _id: resolvedSessionId }));
     resolvedLocationId = session?.locationId || null;
   }
 
@@ -71,7 +72,7 @@ export const checkIn = asyncHandler(async (req, res) => {
   if (resolvedChildId) filter.childId = resolvedChildId;
   else filter.participantName = resolvedName;
 
-  const existing = await Attendance.findOne(filter);
+  const existing = await Attendance.findOne(withUAT(req, filter));
   if (existing) {
     existing.status = status || existing.status;
     existing.method = method || existing.method;
@@ -120,7 +121,7 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
     throw new Error('Invalid QR token');
   }
 
-  const existing = await Attendance.findOne({ sessionId: payload.sessionId, childId });
+  const existing = await Attendance.findOne(withUAT(req, { sessionId: payload.sessionId, childId }));
   if (existing) {
     existing.status = status || existing.status;
     existing.method = 'qr';
@@ -135,7 +136,7 @@ export const qrCheckIn = asyncHandler(async (req, res) => {
     return res.json(saved);
   }
 
-  const session = await Session.findById(payload.sessionId);
+  const session = await Session.findOne(withUAT(req, { _id: payload.sessionId }));
 
   const created = await Attendance.create({
     sessionId: payload.sessionId,

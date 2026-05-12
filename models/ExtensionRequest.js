@@ -13,7 +13,8 @@ const extensionRequestSchema = new mongoose.Schema(
     // For reschedule: which session and new date/slot
     targetSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session' },
     newDate: { type: Date },
-    newSlot: { type: String }
+    newSlot: { type: String },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

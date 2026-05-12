@@ -8,6 +8,11 @@ import Attendance from '../models/Attendance.js';
 import ClassModel from '../models/Class.js';
 import Plan from '../models/Plan.js';
 import Promotion from '../models/Promotion.js';
+import User from '../models/User.js';
+import Child from '../models/Child.js';
+import Trial from '../models/Trial.js';
+import Lead from '../models/Lead.js';
+import ExtensionRequest from '../models/ExtensionRequest.js';
 import mongoose from 'mongoose';
 
 /**
@@ -25,7 +30,12 @@ export const clearUATTransactions = asyncHandler(async (req, res) => {
     invoices: await Invoice.deleteMany(filter),
     memberships: await Membership.deleteMany(filter),
     sessions: await Session.deleteMany(filter),
-    attendance: await Attendance.deleteMany(filter)
+    attendance: await Attendance.deleteMany(filter),
+    users: await User.deleteMany(filter),
+    children: await Child.deleteMany(filter),
+    trials: await Trial.deleteMany(filter),
+    leads: await Lead.deleteMany(filter),
+    extensionRequests: await ExtensionRequest.deleteMany(filter)
   };
 
   res.json({
@@ -152,9 +162,25 @@ export const getUATConfigs = asyncHandler(async (req, res) => {
   const filter = { isUAT: true };
 
   const configs = {
+    // Structural Data
     classes: await ClassModel.find(filter).select('title price locationId createdAt'),
     plans: await Plan.find(filter).select('name price type locationId createdAt'),
-    promotions: await Promotion.find(filter).select('name code discountAmount createdAt')
+    promotions: await Promotion.find(filter).select('name code discountAmount createdAt'),
+    
+    // Transactional Counts
+    counts: {
+      users: await User.countDocuments(filter),
+      children: await Child.countDocuments(filter),
+      bookings: await Booking.countDocuments(filter),
+      memberships: await Membership.countDocuments(filter),
+      payments: await Payment.countDocuments(filter),
+      invoices: await Invoice.countDocuments(filter),
+      sessions: await Session.countDocuments(filter),
+      attendance: await Attendance.countDocuments(filter),
+      trials: await Trial.countDocuments(filter),
+      leads: await Lead.countDocuments(filter),
+      extensionRequests: await ExtensionRequest.countDocuments(filter)
+    }
   };
 
   res.json(configs);
