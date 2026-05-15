@@ -26,7 +26,7 @@ export const locationMiddleware = asyncHandler(async (req, res, next) => {
     location = await Location.findById(headerId);
   } else {
     const slug = headerSlug || querySlug || hostnameSlug || fallbackSlug;
-    if (slug) {
+    if (slug && typeof slug === 'string') {
       location = await Location.findOne({ slug: slug.toLowerCase(), status: 'active' });
     }
   }

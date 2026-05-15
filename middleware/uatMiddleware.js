@@ -15,16 +15,22 @@ export const uatDetector = asyncHandler(async (req, res, next) => {
  * Use this in controllers: Session.find(withUAT(req, { ...otherFilters }))
  */
 export const withUAT = (req, filter = {}) => {
-  if (req.isUAT) {
-    return { ...filter, isUAT: true };
+  const uatFilter = req.isUAT 
+    ? { isUAT: true } 
+    : { $or: [{ isUAT: false }, { isUAT: { $exists: false } }] };
+
+  // If filter already has an $or, we must use $and to merge them
+  if (filter.$or) {
+    return {
+      $and: [
+        filter,
+        uatFilter
+      ]
+    };
   }
-  
-  // For Live mode, include records where isUAT is false OR missing
+
   return {
     ...filter,
-    $or: [
-      { isUAT: false },
-      { isUAT: { $exists: false } }
-    ]
+    ...uatFilter
   };
 };

@@ -14,6 +14,7 @@ import Invoice from '../models/Invoice.js';
 import Lead from '../models/Lead.js';
 import ExtensionRequest from '../models/ExtensionRequest.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
   const now = new Date();
@@ -39,45 +40,45 @@ export const getSummary = asyncHandler(async (req, res) => {
     pendingPayments,
     pendingBookings
   ] = await Promise.all([
-    ClassModel.countDocuments(locationFilter),
-    Trainer.countDocuments(locationFilter),
-    Session.countDocuments({ ...locationFilter, status: { $ne: 'cancelled' }, startTime: { $gte: now } }),
+    ClassModel.countDocuments(withUAT(req, locationFilter)),
+    Trainer.countDocuments(withUAT(req, locationFilter)),
+    Session.countDocuments(withUAT(req, { ...locationFilter, status: { $ne: 'cancelled' }, startTime: { $gte: now } })),
     Booking.aggregate([
-      ...(locationId ? [{ $match: { locationId } }] : []),
+      { $match: withUAT(req, locationId ? { locationId } : {}) },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]),
-    User.countDocuments(locationFilter),
-    User.countDocuments({ ...locationFilter, role: { $in: ['admin', 'superadmin'] } }),
-    Membership.countDocuments({ ...locationFilter, status: 'active' }),
+    User.countDocuments(withUAT(req, locationFilter)),
+    User.countDocuments(withUAT(req, { ...locationFilter, role: { $in: ['admin', 'superadmin'] } })),
+    Membership.countDocuments(withUAT(req, { ...locationFilter, status: 'active' })),
     Payment.aggregate([
-      ...(locationId ? [{ $match: { locationId } }] : []),
+      { $match: withUAT(req, locationId ? { locationId } : {}) },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
-    Trial.countDocuments({
+    Trial.countDocuments(withUAT(req, {
       ...locationFilter,
       status: 'pending',
       ...(sa.trials ? { createdAt: { $gt: sa.trials } } : {})
-    }),
-    Lead.countDocuments({
+    })),
+    Lead.countDocuments(withUAT(req, {
       ...locationFilter,
       status: 'pending',
       ...(sa.leads ? { createdAt: { $gt: sa.leads } } : {})
-    }),
-    ExtensionRequest.countDocuments({
+    })),
+    ExtensionRequest.countDocuments(withUAT(req, {
       ...locationFilter,
       status: 'pending',
       ...(sa.extensions ? { createdAt: { $gt: sa.extensions } } : {})
-    }),
-    Payment.countDocuments({
+    })),
+    Payment.countDocuments(withUAT(req, {
       ...locationFilter,
       status: 'pending',
       ...(sa.payments ? { createdAt: { $gt: sa.payments } } : {})
-    }),
-    Booking.countDocuments({
+    })),
+    Booking.countDocuments(withUAT(req, {
       ...locationFilter,
       status: 'pending',
       ...(sa.bookings ? { createdAt: { $gt: sa.bookings } } : {})
-    })
+    }))
   ]);
 
   const bookingSummary = bookingTotals.reduce(

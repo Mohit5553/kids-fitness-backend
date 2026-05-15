@@ -34,7 +34,8 @@ const userSchema = new mongoose.Schema(
       leads: Date,
       extensions: Date,
       payments: Date
-    }
+    },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

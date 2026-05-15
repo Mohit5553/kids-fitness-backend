@@ -10,7 +10,8 @@ const trialSchema = new mongoose.Schema(
     preferredClass: { type: String },
     preferredTime: { type: String },
     status: { type: String, enum: ['new', 'contacted', 'booked', 'closed'], default: 'new' },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

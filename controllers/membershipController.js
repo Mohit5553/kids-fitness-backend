@@ -18,6 +18,7 @@ import { getNextInvoiceNumber, getNextBookingNumber } from '../utils/sequenceGen
 import Attendance from '../models/Attendance.js';
 import ExtensionRequest from '../models/ExtensionRequest.js';
 import { notifyAdmins } from '../utils/socketUtils.js';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 const addDays = (date, days) => {
   const result = new Date(date);
@@ -45,7 +46,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
   }
 
   try {
-    const memberships = await Membership.find({ userId: req.user._id })
+    const memberships = await Membership.find(withUAT(req, { userId: req.user._id }))
       .populate('userId', 'name email firstName lastName')
       .populate('planId')
       .populate('childId')
@@ -76,7 +77,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
 
         // 2. Specialized fix for Mohit and Hardik
         if (isMohit && !m.childId && (m.planId?.name?.includes('Starter') || m.planId?.name?.includes('25'))) {
-          const hardik = await Child.findOne({ name: /Hardik/i });
+          const hardik = await Child.findOne(withUAT(req, { name: /Hardik/i }));
           if (hardik) {
             m.childId = hardik._id;
             saved = true;
@@ -88,11 +89,11 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
           let matchingBooking = null;
 
           if (m.paymentId) {
-            matchingBooking = await Booking.findOne({ paymentId: m.paymentId?._id || m.paymentId });
+            matchingBooking = await Booking.findOne(withUAT(req, { paymentId: m.paymentId?._id || m.paymentId }));
           }
 
           if (!matchingBooking) {
-            matchingBooking = await Booking.findOne({
+            matchingBooking = await Booking.findOne(withUAT(req, {
               userId: m.userId?._id || m.userId,
               planId: m.planId?._id || m.planId,
               'participants.childId': m.childId?._id || m.childId,
@@ -100,7 +101,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
                 $gte: new Date(m.createdAt.getTime() - 43200000), // Within 12 hours
                 $lte: new Date(m.createdAt.getTime() + 43200000)
               }
-            }).sort({ createdAt: -1 });
+            })).sort({ createdAt: -1 });
           }
 
           if (matchingBooking) {
@@ -155,7 +156,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
 
         // 4. Invoice Healer: Restore missing invoices for existing bookings
         if (m.bookingId) {
-          const invoiceExists = await Invoice.findOne({ bookingId: m.bookingId?._id || m.bookingId });
+          const invoiceExists = await Invoice.findOne(withUAT(req, { bookingId: m.bookingId?._id || m.bookingId }));
           if (!invoiceExists) {
             try {
               console.log(`[Invoice Healer] Restoring missing invoice for booking: ${m.bookingId}`);
@@ -222,7 +223,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
     }
 
     // 5. FINAL POPULATION: Ensure healed records have full objects before sending to frontend
-    const healedMemberships = await Membership.find({ _id: { $in: memberships.map(m => m._id) } })
+    const healedMemberships = await Membership.find(withUAT(req, { _id: { $in: memberships.map(m => m._id) } }))
       .populate('userId', 'name email firstName lastName')
       .populate('planId')
       .populate('childId')
@@ -233,18 +234,18 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
     // FETCH ATTENDANCE DATA TO ENRICH SESSIONS
     const mIds = healedMemberships.map(m => m._id);
     const bIds = healedMemberships.map(m => m.bookingId?._id || m.bookingId).filter(Boolean);
-    const atts = await Attendance.find({
+    const atts = await Attendance.find(withUAT(req, {
       $or: [
         { membershipId: { $in: mIds } },
         { bookingId: { $in: bIds } }
       ]
-    }).lean();
+    })).lean();
 
     // FETCH RESCHEDULE REQUESTS
-    const resRequests = await ExtensionRequest.find({
+    const resRequests = await ExtensionRequest.find(withUAT(req, {
       membershipId: { $in: mIds },
       type: 'reschedule'
-    }).lean();
+    })).lean();
 
     // Transform memberships to include attendanceStatus in each generatedSession and overall counts
     const finalMemberships = await Promise.all(healedMemberships.map(async (m) => {
@@ -315,7 +316,7 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
 
-  const memberships = await Membership.find(filter)
+  const memberships = await Membership.find(withUAT(req, filter))
     .populate('userId', 'name email')
     .populate('planId', 'name price validity type classesIncluded durationWeeks billingCycle')
     .populate('childId', 'name')
@@ -323,10 +324,10 @@ export const getAllMemberships = asyncHandler(async (req, res) => {
 
   // Enrich with attendance counts
   const enriched = await Promise.all(memberships.map(async (m) => {
-    const attendanceCount = await Attendance.countDocuments({
+    const attendanceCount = await Attendance.countDocuments(withUAT(req, {
       membershipId: m._id,
       status: { $in: ['present', 'late'] }
-    });
+    }));
 
     return {
       ...m.toObject(),
@@ -532,7 +533,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       sessionsPerWeek,
       paymentId,
       locationId: plan.locationId || resolveReadLocationId(req),
-      membershipUnits
+      membershipUnits,
+      isUAT: req.isUAT || false
     }], { session });
 
     if (preferredDays && preferredSlots && preferredDays.length > 0) {
@@ -591,7 +593,8 @@ export const createMembership = asyncHandler(async (req, res) => {
         sessionsPerWeek,
         paymentId,
         locationId: plan.locationId,
-        isBogoFree: true
+        isBogoFree: true,
+        isUAT: req.isUAT || false
       }], { session });
 
       bogoMembershipId = freeMembership._id;
@@ -670,7 +673,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       discountAmount,
       couponCode: resolvedCouponCode,
       couponAmount: resolvedCouponAmount,
-      participants
+      participants,
+      isUAT: req.isUAT || false
     }], { session });
 
     notifyAdmins(req, 'new_booking', {
@@ -743,7 +747,8 @@ export const createMembership = asyncHandler(async (req, res) => {
       locationId: plan.locationId,
       discountAmount: discountAmount || 0,
       couponAmount: resolvedCouponAmount || 0,
-      couponCode: resolvedCouponCode
+      couponCode: resolvedCouponCode,
+      isUAT: req.isUAT || false
     }], { session });
 
     // COUPON GENERATION LOGIC (Cash Deposit Promo)

@@ -12,7 +12,8 @@ const childSchema = new mongoose.Schema(
     photoUrl: { type: String },
     school: { type: String },
     medicalCondition: { type: String },
-    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' }
+    locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

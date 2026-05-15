@@ -7,7 +7,8 @@ const leadSchema = new mongoose.Schema(
     phone: { type: String },
     message: { type: String, required: true },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
-    status: { type: String, enum: ['new', 'contacted', 'closed'], default: 'new' }
+    status: { type: String, enum: ['new', 'contacted', 'closed'], default: 'new' },
+    isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

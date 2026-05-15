@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { sendAccountUpdateEmail } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 const syncTrainerProfile = async (user) => {
   if (user.role === 'trainer') {
@@ -31,7 +32,7 @@ export const getUsers = asyncHandler(async (req, res) => {
   // Show all users regardless of branch selection in management view
   const filter = {};
 
-  const users = await User.find(filter)
+  const users = await User.find(withUAT(req, filter))
     .populate('locationIds', 'name')
     .select('-password')
     .sort({ createdAt: -1 });
@@ -39,7 +40,7 @@ export const getUsers = asyncHandler(async (req, res) => {
 });
 
 export const getUserById = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.params.id).select('-password');
+  const user = await User.findOne(withUAT(req, { _id: req.params.id })).select('-password');
   if (!user) {
     res.status(404);
     throw new Error('User not found');
@@ -120,7 +121,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
 export const createStaff = asyncHandler(async (req, res) => {
   const { name, email, password, role, phone, locationIds } = req.body;
 
-  const userExists = await User.findOne({ email });
+  const userExists = await User.findOne(withUAT(req, { email }));
   if (userExists) {
     res.status(400);
     throw new Error('User already exists');
@@ -135,7 +136,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     password: hashedPassword,
     role,
     phone,
-    locationIds: locationIds || (req.user.locationIds && req.user.locationIds.length > 0 ? [req.user.locationIds[0]] : [])
+    locationIds: locationIds || (req.user.locationIds && req.user.locationIds.length > 0 ? [req.user.locationIds[0]] : []),
+    isUAT: req.isUAT || false
   });
 
   await syncTrainerProfile(user).catch(err => console.error('Trainer sync failed:', err.message));
@@ -149,7 +151,7 @@ export const createStaff = asyncHandler(async (req, res) => {
 });
 
 export const getUserChildren = asyncHandler(async (req, res) => {
-  const children = await Child.find({ parentId: req.params.id });
+  const children = await Child.find(withUAT(req, { parentId: req.params.id }));
   res.json(children);
 });
 
@@ -161,7 +163,7 @@ export const lookupUser = asyncHandler(async (req, res) => {
   }
 
   const regex = new RegExp(query.trim(), 'i');
-  const user = await User.findOne({
+  const user = await User.findOne(withUAT(req, {
     role: { $in: ['parent', 'customer'] },
     $or: [
       { email: new RegExp(`^${query.trim()}$`, 'i') },
@@ -169,13 +171,13 @@ export const lookupUser = asyncHandler(async (req, res) => {
       { phone: regex },
       { name: regex }
     ]
-  }).select('-password');
+  })).select('-password');
 
   if (!user) {
     return res.status(404).json({ message: 'User not found' });
   }
 
-  const children = await Child.find({ parentId: user._id });
+  const children = await Child.find(withUAT(req, { parentId: user._id }));
   res.json({ user, children });
 });
 
@@ -190,9 +192,9 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
 
   let user;
   if (email) {
-    user = await User.findOne({ email: new RegExp(`^${email}$`, 'i') });
+    user = await User.findOne(withUAT(req, { email: new RegExp(`^${email}$`, 'i') }));
   } else if (phone) {
-    user = await User.findOne({ phone });
+    user = await User.findOne(withUAT(req, { phone }));
   }
 
   if (!user) {
@@ -208,7 +210,8 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
       password: hashedPassword,
       role: 'parent',
       status: 'active',
-      locationIds: req.user.locationIds || []
+      locationIds: req.user.locationIds || [],
+      isUAT: req.isUAT || false
     });
   } else {
     // Update existing user details if provided and missing
@@ -230,13 +233,14 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
         name: childData.name,
         age: childData.age,
         gender: childData.gender || 'male',
-        locationId: req.user.locationIds && req.user.locationIds.length > 0 ? req.user.locationIds[0] : undefined
+        locationId: req.user.locationIds && req.user.locationIds.length > 0 ? req.user.locationIds[0] : undefined,
+        isUAT: req.isUAT || false
       });
       createdChildren.push(newChild);
     }
   }
 
-  const allChildren = await Child.find({ parentId: user._id });
+  const allChildren = await Child.find(withUAT(req, { parentId: user._id }));
 
   res.status(201).json({
     user: {
@@ -256,11 +260,11 @@ export const suggestUsers = asyncHandler(async (req, res) => {
     return res.json([]);
   }
   const regex = new RegExp(query.trim(), 'i');
-  const users = await User.find({
+  const users = await User.find(withUAT(req, {
     role: { $in: ['parent', 'customer'] },
     status: 'active',
     $or: [{ name: regex }, { email: regex }, { phone: regex }]
-  })
+  }))
     .select('_id name email phone role')
     .limit(8)
     .lean();
