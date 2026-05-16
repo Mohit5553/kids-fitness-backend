@@ -9,6 +9,7 @@ import { resolveWriteLocationId } from '../utils/locationScope.js';
 import { linkUserBookings } from './bookingController.js';
 import { sendWelcomeEmail, sendPasswordResetEmail } from '../utils/mailer.js';
 import crypto from 'crypto';
+import { withUAT } from '../middleware/uatMiddleware.js';
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -18,20 +19,26 @@ const generateToken = (id) => {
 
 export const registerUser = asyncHandler(async (req, res) => {
   const {
-    name, email, phone, password,
+    name, email: rawEmail, phone, password,
     firstName, lastName, instagram, gender,
     relationship, birthDate, address, city,
     country, avatarUrl, locationIds: preferredLocationIds,
     children // Array of child objects
   } = req.body;
 
+  const email = rawEmail?.trim();
+
   if (!name || !email || !password) {
     res.status(400);
     throw new Error('Name, email, and password are required');
   }
 
-  const existing = await User.findOne({ email, isUAT: req.isUAT || false });
-  if (existing) {
+  const uatFilter = req.isUAT 
+    ? { isUAT: true } 
+    : { $or: [{ isUAT: false }, { isUAT: { $exists: false } }] };
+
+  const userExists = await User.findOne({ email, ...uatFilter });
+  if (userExists) {
     res.status(400);
     throw new Error('User already exists');
   }
@@ -120,13 +127,19 @@ export const registerUser = asyncHandler(async (req, res) => {
 });
 
 export const loginUser = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email: rawEmail, password } = req.body;
+  const email = rawEmail?.trim();
   if (!email || !password) {
     res.status(400);
     throw new Error('Email and password are required');
   }
 
-  const user = await User.findOne({ email, isUAT: req.isUAT || false });
+  const uatFilter = req.isUAT 
+    ? { isUAT: true } 
+    : { $or: [{ isUAT: false }, { isUAT: { $exists: false } }] };
+
+  const user = await User.findOne({ email, ...uatFilter });
+
   if (!user) {
     res.status(401);
     throw new Error('Invalid credentials');
@@ -199,7 +212,7 @@ export const getMe = asyncHandler(async (req, res) => {
 });
 
 export const forgotPassword = asyncHandler(async (req, res) => {
-  const user = await User.findOne({ email: req.body.email });
+  const user = await User.findOne(withUAT(req, { email: req.body.email }));
 
   if (!user) {
     // For security, don't reveal if user exists. Just say "If an account exists..."
@@ -226,11 +239,11 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   try {
     const sent = await sendPasswordResetEmail(user, resetUrl);
     if (!sent) {
-       user.resetPasswordToken = undefined;
-       user.resetPasswordExpires = undefined;
-       await user.save();
-       res.status(500);
-       throw new Error('Email could not be sent');
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      await user.save();
+      res.status(500);
+      throw new Error('Email could not be sent');
     }
 
     res.status(200).json({ message: 'Password reset link sent to email' });
