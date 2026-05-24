@@ -35,7 +35,8 @@ const userSchema = new mongoose.Schema(
       extensions: Date,
       payments: Date
     },
-    isUAT: { type: Boolean, default: false, index: true }
+    isUAT: { type: Boolean, default: false, index: true },
+    allowUAT: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

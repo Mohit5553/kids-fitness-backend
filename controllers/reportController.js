@@ -181,18 +181,23 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       // Enrich with session/booking counts if needed, but for simplicity we'll return basic data first
       break;
 
-    case 'trainers':
+    case 'trainers': {
       // Trainers have locationIds (array)
       const trainerFilter = { ...filter };
       if (trainerFilter.locationId) {
         trainerFilter.locationIds = trainerFilter.locationId;
         delete trainerFilter.locationId;
       }
-      data = await Trainer.find(trainerFilter)
+      const rawTrainers = await Trainer.find(trainerFilter)
         .populate('locationIds', 'name')
         .sort({ createdAt: -1 })
         .lean();
+      data = rawTrainers.map(t => ({
+        ...t,
+        locationId: t.locationIds && t.locationIds.length > 0 ? t.locationIds[0] : null
+      }));
       break;
+    }
 
     case 'pricing':
       data = await Plan.find(filter)
@@ -287,13 +292,63 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         .lean();
       break;
 
-    case 'users':
+    case 'users': {
       // Fetch regular users (parents and customers), not admins
-      data = await User.find({ ...filter, ...dateFilter, role: { $in: ['parent', 'customer'] } })
+      const rawUsers = await User.find({ ...filter, ...dateFilter, role: { $in: ['parent', 'customer'] } })
         .populate('locationId', 'name')
+        .populate('locationIds', 'name')
         .sort({ createdAt: -1 })
         .lean();
+
+      data = await Promise.all(rawUsers.map(async u => {
+        let resolvedLocation = u.locationId;
+        if (!resolvedLocation && u.locationIds && u.locationIds.length > 0) {
+          resolvedLocation = u.locationIds[0];
+        }
+
+        const children = await Child.find({ parentId: u._id }).select('name').lean();
+        const childrenNames = children.map(c => c.name).join(', ');
+
+        return {
+          ...u,
+          locationId: resolvedLocation,
+          children: childrenNames || 'None'
+        };
+      }));
       break;
+    }
+
+    case 'staff': {
+      const staffFilter = { ...filter, role: { $nin: ['parent', 'customer'] } };
+      if (staffFilter.locationId) {
+        const locId = staffFilter.locationId;
+        delete staffFilter.locationId;
+        staffFilter.$or = [
+          { locationId: locId },
+          { locationIds: locId }
+        ];
+      }
+
+      const rawStaff = await User.find(withUAT(req, { ...staffFilter, ...dateFilter }))
+        .select('-password')
+        .populate('locationId', 'name')
+        .populate('locationIds', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      data = rawStaff.map(s => {
+        let resolvedLocation = s.locationId;
+        if (!resolvedLocation && s.locationIds && s.locationIds.length > 0) {
+          resolvedLocation = s.locationIds[0];
+        }
+
+        return {
+          ...s,
+          locationId: resolvedLocation
+        };
+      });
+      break;
+    }
 
     case 'trainer_sales':
       // This report shows sessions and counts bookings/revenue per session

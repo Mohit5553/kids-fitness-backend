@@ -55,7 +55,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     throw new Error('User not found');
   }
 
-  const { name, email, phone, role, locationIds } = req.body;
+  const { name, email, phone, role, locationIds, allowUAT } = req.body;
 
   if (email && email !== user.email) {
     const existing = await User.findOne({ email });
@@ -69,6 +69,7 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (name) user.name = name;
   if (phone !== undefined) user.phone = phone;
   if (role) user.role = role;
+  if (allowUAT !== undefined) user.allowUAT = allowUAT;
 
   if (req.user?.role === 'superadmin' && locationIds !== undefined) {
     user.locationIds = locationIds || [];
@@ -86,7 +87,8 @@ export const updateUser = asyncHandler(async (req, res) => {
     email: saved.email,
     phone: saved.phone,
     role: saved.role,
-    locationIds: saved.locationIds
+    locationIds: saved.locationIds,
+    allowUAT: saved.allowUAT
   });
 });
 
@@ -119,7 +121,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
-  const { name, email, password, role, phone, locationIds } = req.body;
+  const { name, email, password, role, phone, locationIds, allowUAT } = req.body;
 
   const userExists = await User.findOne(withUAT(req, { email }));
   if (userExists) {
@@ -137,7 +139,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     role,
     phone,
     locationIds: locationIds || (req.user.locationIds && req.user.locationIds.length > 0 ? [req.user.locationIds[0]] : []),
-    isUAT: req.isUAT || false
+    isUAT: req.isUAT || false,
+    allowUAT: allowUAT || false
   });
 
   await syncTrainerProfile(user).catch(err => console.error('Trainer sync failed:', err.message));
@@ -146,7 +149,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     _id: user._id,
     name: user.name,
     email: user.email,
-    role: user.role
+    role: user.role,
+    allowUAT: user.allowUAT
   });
 });
 

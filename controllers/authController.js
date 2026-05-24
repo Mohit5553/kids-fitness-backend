@@ -122,6 +122,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     avatarUrl: user.avatarUrl,
     trainerId,
     permissions,
+    allowUAT: user.allowUAT,
     token: generateToken(user._id)
   });
 });
@@ -183,6 +184,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     locationIds: user.locationIds,
     trainerId,
     permissions,
+    allowUAT: user.allowUAT,
     token: generateToken(user._id)
   });
 });
@@ -337,6 +339,7 @@ export const updateMe = asyncHandler(async (req, res) => {
         tradeLicenseNo: updatedUser.tradeLicenseNo,
         taxNumber: updatedUser.taxNumber,
         companyAddress: updatedUser.companyAddress,
+        allowUAT: updatedUser.allowUAT,
         token: generateToken(updatedUser._id),
       });
     } catch (saveErr) {
