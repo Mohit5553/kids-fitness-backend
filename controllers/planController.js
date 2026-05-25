@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import Plan from '../models/Plan.js';
 import Promotion from '../models/Promotion.js';
 import Session from '../models/Session.js';
@@ -63,7 +64,8 @@ export const createPlan = asyncHandler(async (req, res) => {
     durationWeeks, durationValue, durationUnit,
     validity, validityValue, validityUnit,
     billingCycle, tagline, isFeatured, sessionType, 
-    validDays, gender, timeSlots, trainerAllocation, trainerId, extensionRules 
+    validDays, gender, timeSlots, trainerAllocation, trainerId, extensionRules,
+    replicateToLocations
   } = req.body;
 
   if (!name || price == null) {
@@ -102,6 +104,24 @@ export const createPlan = asyncHandler(async (req, res) => {
     trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId,
     isUAT: req.isUAT || false
   });
+
+  if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
+    const replicationPromises = replicateToLocations
+      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== locationId?.toString())
+      .map(async (locId) => {
+        return Plan.create({ 
+          name, price, 
+          validity: finalValidity, validityValue, validityUnit,
+          benefits, type, classesIncluded, 
+          durationWeeks: finalDurationWeeks, durationValue, durationUnit,
+          billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
+          trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId: locId,
+          isUAT: req.isUAT || false
+        });
+      });
+    await Promise.all(replicationPromises);
+  }
+
   res.status(201).json(created);
 });
 
@@ -120,6 +140,8 @@ export const updatePlan = asyncHandler(async (req, res) => {
   const oldTrainerId = plan.trainerId?.toString();
   const updates = { ...req.body };
   if (updates.locationId === 'all') updates.locationId = null;
+
+  const { replicateToLocations } = req.body;
 
   // Sync logic for updates
   if (updates.validityValue && updates.validityUnit) {
@@ -161,6 +183,41 @@ export const updatePlan = asyncHandler(async (req, res) => {
         trainerStatus: 'accepted'
       }
     );
+  }
+
+  if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
+    const replicationPromises = replicateToLocations
+      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== plan.locationId?.toString())
+      .map(async (locId) => {
+        return Plan.create({ 
+          name: plan.name,
+          price: plan.price, 
+          validity: plan.validity,
+          validityValue: plan.validityValue,
+          validityUnit: plan.validityUnit,
+          benefits: plan.benefits,
+          type: plan.type,
+          classesIncluded: plan.classesIncluded, 
+          durationWeeks: plan.durationWeeks,
+          durationValue: plan.durationValue,
+          durationUnit: plan.durationUnit,
+          billingCycle: plan.billingCycle,
+          tagline: plan.tagline,
+          isFeatured: plan.isFeatured,
+          sessionType: plan.sessionType,
+          validDays: plan.validDays,
+          gender: plan.gender,
+          timeSlots: plan.timeSlots, 
+          trainerAllocation: plan.trainerAllocation,
+          trainerId: plan.trainerId,
+          extensionRules: plan.extensionRules,
+          taxId: plan.taxId,
+          locationId: locId,
+          isUAT: plan.isUAT || false,
+          status: plan.status || 'active'
+        });
+      });
+    await Promise.all(replicationPromises);
   }
 
   res.json(saved);

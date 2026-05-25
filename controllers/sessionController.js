@@ -7,6 +7,17 @@ import { signQrToken } from '../utils/qrToken.js';
 import { resolveReadLocationId, resolveReadLocationIds, resolveWriteLocationId } from '../utils/locationScope.js';
 import { sendTrainerSessionReminderEmail } from '../utils/mailer.js';
 
+const parseDurationToMinutes = (duration) => {
+  if (!duration) return 60;
+  const str = String(duration).toLowerCase().trim();
+  const num = parseFloat(str);
+  if (isNaN(num)) return 60;
+  if (str.includes('hour') || str.includes('hr')) {
+    return Math.round(num * 60);
+  }
+  return Math.round(num);
+};
+
 // @desc    Get all sessions with filters
 // @route   GET /api/sessions
 // @access  Private
@@ -269,7 +280,7 @@ export const createSession = asyncHandler(async (req, res) => {
   let end = endTime ? new Date(endTime) : null;
 
   if (!end && classItem.duration) {
-    const durationMinutes = parseInt(classItem.duration) || 60;
+    const durationMinutes = parseDurationToMinutes(classItem.duration);
     end = new Date(start.getTime() + durationMinutes * 60000);
   }
 
@@ -321,7 +332,7 @@ export const updateSession = asyncHandler(async (req, res) => {
   if (updateData.startTime && !updateData.endTime) {
     const classItem = await ClassModel.findById(session.classId);
     if (classItem && classItem.duration) {
-      const durationMinutes = parseInt(classItem.duration) || 60;
+      const durationMinutes = parseDurationToMinutes(classItem.duration);
       end = new Date(start.getTime() + durationMinutes * 60000);
       updateData.endTime = end;
     }
@@ -536,7 +547,7 @@ export const bulkCreateSessions = asyncHandler(async (req, res) => {
       let end = endTime ? new Date(endTime) : null;
 
       if (!end && classItem.duration) {
-        const durationMinutes = parseInt(classItem.duration) || 60;
+        const durationMinutes = parseDurationToMinutes(classItem.duration);
         end = new Date(start.getTime() + durationMinutes * 60000);
       }
 
