@@ -295,6 +295,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
     case 'users': {
       // Fetch regular users (parents and customers), not admins
       const rawUsers = await User.find({ ...filter, ...dateFilter, role: { $in: ['parent', 'customer'] } })
+        .select('-password')
         .populate('locationId', 'name')
         .populate('locationIds', 'name')
         .sort({ createdAt: -1 })
@@ -306,8 +307,11 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           resolvedLocation = u.locationIds[0];
         }
 
-        const children = await Child.find({ parentId: u._id }).select('name').lean();
-        const childrenNames = children.map(c => c.name).join(', ');
+        const children = await Child.find({ parentId: u._id }).select('name gender').lean();
+        const childrenNames = children.map(c => {
+          const genderStr = c.gender ? ` (${c.gender.charAt(0).toUpperCase() + c.gender.slice(1)})` : '';
+          return `${c.name}${genderStr}`;
+        }).join(', ');
 
         return {
           ...u,

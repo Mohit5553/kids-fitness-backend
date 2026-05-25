@@ -11,9 +11,11 @@ const classSchema = new mongoose.Schema(
     duration: { type: String },
     availableTrainers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Trainer' }],
     price: { type: Number, required: true },
+    capacity: { type: Number },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     imageUrl: { type: String },
     taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
+    creditCost: { type: Number, default: 1 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     isUAT: { type: Boolean, default: false, index: true }
   },

@@ -71,7 +71,7 @@ export const getClassById = asyncHandler(async (req, res) => {
 });
 
 export const createClass = asyncHandler(async (req, res) => {
-  const { title, description, ageGroup, duration, availableTrainers, price, capacity, imageUrl } = req.body;
+  const { title, description, ageGroup, duration, availableTrainers, price, capacity, imageUrl, creditCost } = req.body;
   if (!title || price == null) {
     res.status(400);
     throw new Error('Title and price are required');
@@ -81,15 +81,26 @@ export const createClass = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Location is required');
   }
+
+  const validTrainers = Array.isArray(availableTrainers)
+    ? availableTrainers.filter(t => t && mongoose.Types.ObjectId.isValid(t))
+    : [];
+
+  if (validTrainers.length === 0) {
+    res.status(400);
+    throw new Error('At least one trainer is required');
+  }
+
   const created = await ClassModel.create({
     title,
     description,
     ageGroup,
     duration,
-    availableTrainers,
+    availableTrainers: validTrainers,
     price,
-    capacity,
+    capacity: (capacity === '' || capacity == null) ? null : Number(capacity),
     imageUrl,
+    creditCost: creditCost || 1,
     locationId,
     isUAT: req.isUAT || false
   });
@@ -106,6 +117,22 @@ export const updateClass = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Not allowed');
   }
+
+  if (req.body.availableTrainers !== undefined) {
+    const validTrainers = Array.isArray(req.body.availableTrainers)
+      ? req.body.availableTrainers.filter(t => t && mongoose.Types.ObjectId.isValid(t))
+      : [];
+    if (validTrainers.length === 0) {
+      res.status(400);
+      throw new Error('At least one trainer is required');
+    }
+    req.body.availableTrainers = validTrainers;
+  }
+
+  if (req.body.capacity !== undefined) {
+    req.body.capacity = (req.body.capacity === '' || req.body.capacity == null) ? null : Number(req.body.capacity);
+  }
+
   Object.assign(classItem, req.body);
   const saved = await classItem.save();
   res.json(saved);
