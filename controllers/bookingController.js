@@ -525,7 +525,7 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
     // LOCK LOGIC FOR MEMBERSHIP SESSIONS (Virtual Bookings)
     // For single check-ins, we lock if the session date has passed.
-    if (session && new Date(session.startTime) < startOfToday) {
+    if (session && new Date(session.startTime) < startOfToday && !['attended', 'completed'].includes(status)) {
       res.status(400);
       throw new Error('This session has already passed and its attendance cannot be changed.');
     }
@@ -568,7 +568,7 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
   // LOCK LOGIC - DIFFERENTIATE SESSION VS PACKAGE
   if (booking.bookingType === 'session') {
     // For single sessions, lock if the date has passed
-    if (new Date(booking.date) < startOfToday) {
+    if (new Date(booking.date) < startOfToday && !['attended', 'completed'].includes(status)) {
       res.status(400);
       throw new Error('The date for this session has passed and its status cannot be changed.');
     }
