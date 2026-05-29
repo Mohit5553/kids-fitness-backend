@@ -49,14 +49,16 @@ import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
 const httpServer = createServer(app);
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',')
+  : ['http://localhost:5173'];
 
 const io = new Server(httpServer, {
   cors: {
-    origin: corsOrigin,
-    methods: ['GET', 'POST'],
-    credentials: true
-  },
+  origin: allowedOrigins,
+  methods: ['GET', 'POST'],
+  credentials: true
+},
   transports: ['polling', 'websocket']
 });
 
@@ -77,7 +79,10 @@ io.on('connection', (socket) => {
 });
 
 app.use(express.json());
-app.use(cors({ origin: corsOrigin, credentials: true }));
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
