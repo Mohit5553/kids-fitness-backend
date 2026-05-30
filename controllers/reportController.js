@@ -13,6 +13,7 @@ import Attendance from '../models/Attendance.js';
 import Invoice from '../models/Invoice.js';
 import Lead from '../models/Lead.js';
 import ExtensionRequest from '../models/ExtensionRequest.js';
+import Expense from '../models/Expense.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 import { withUAT } from '../middleware/uatMiddleware.js';
 
@@ -577,6 +578,52 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
         });
       });
       data = lineItems;
+      break;
+    }
+
+    case 'profit_loss': {
+      // 1. Get Revenues (Payments with status = paid)
+      const payments = await Payment.find({ ...filter, ...dateFilter, status: 'paid' })
+        .populate('userId', 'name email')
+        .populate('locationId', 'name')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // 2. Get Expenses
+      let expenseDateFilter = {};
+      if (sDate && eDate) {
+        expenseDateFilter.date = { $gte: sDate, $lte: eDate };
+      } else if (sDate) {
+        expenseDateFilter.date = { $gte: sDate };
+      } else if (eDate) {
+        expenseDateFilter.date = { $lte: eDate };
+      }
+
+      const expenses = await Expense.find({ ...filter, ...expenseDateFilter, isUat: req.isUat === true })
+        .populate('locationId', 'name')
+        .sort({ date: -1 })
+        .lean();
+
+      // Format data for response
+      data = {
+        revenues: payments.map(p => ({
+          _id: p._id,
+          date: p.createdAt,
+          amount: p.amount,
+          source: p.paymentMethod,
+          type: p.paymentType || 'Sales',
+          customerName: p.userId?.name || 'Guest',
+          location: p.locationId?.name || 'N/A'
+        })),
+        expenses: expenses.map(e => ({
+          _id: e._id,
+          date: e.date,
+          amount: e.amount,
+          category: e.category,
+          title: e.title,
+          location: e.locationId?.name || 'N/A'
+        }))
+      };
       break;
     }
 
