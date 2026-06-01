@@ -52,7 +52,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
       .populate('childId')
       .populate({
         path: 'bookingId',
-        select: 'participants bookingNumber'
+        select: 'participants bookingNumber totalAmount'
       })
       .populate({
         path: 'generatedSessions',
@@ -227,7 +227,7 @@ export const getMyMemberships = asyncHandler(async (req, res) => {
       .populate('userId', 'name email firstName lastName')
       .populate('planId')
       .populate('childId')
-      .populate({ path: 'bookingId', select: 'participants bookingNumber' })
+      .populate({ path: 'bookingId', select: 'participants bookingNumber totalAmount' })
       .populate({ path: 'generatedSessions', populate: { path: 'trainerId', select: 'name' } })
       .sort({ createdAt: -1 });
 
@@ -353,7 +353,8 @@ export const createMembership = asyncHandler(async (req, res) => {
     couponAmount,
     discountAmount: reqDiscountAmount,
     membershipUnits: reqUnits,
-    startDate: reqStartDate
+    startDate: reqStartDate,
+    upgradeFromMembershipId
   } = req.body;
 
   // FALLBACK (Part 17): Ensure preferredSlots is never empty if days are picked.
@@ -471,6 +472,7 @@ export const createMembership = asyncHandler(async (req, res) => {
     childId: childId || null,
     planId: planId,
     status: { $in: ['active', 'frozen'] },
+    _id: { $ne: upgradeFromMembershipId },
     $or: [
       { endDate: { $gte: startDate } },
       { endDate: null } // Unlimited validity
@@ -495,6 +497,7 @@ export const createMembership = asyncHandler(async (req, res) => {
       userId: targetUserId,
       childId: childId || null,
       status: { $in: ['active', 'frozen'] },
+      _id: { $ne: upgradeFromMembershipId },
       $or: [
         { startDate: { $lte: finalEndDate }, endDate: { $gte: startDate } },
         { endDate: null, startDate: { $lte: finalEndDate } }
@@ -536,6 +539,25 @@ export const createMembership = asyncHandler(async (req, res) => {
       membershipUnits,
       isUAT: req.isUAT || false
     }], { session });
+
+    if (upgradeFromMembershipId) {
+      const oldMembership = await Membership.findById(upgradeFromMembershipId).session(session);
+      if (oldMembership) {
+        oldMembership.status = 'cancelled';
+        oldMembership.notes = (oldMembership.notes || '') + `\nUpgraded to membership ${primaryMembership._id}`;
+        await oldMembership.save({ session });
+        
+        // Cancel pending generated sessions for the old membership
+        if (oldMembership.generatedSessions && oldMembership.generatedSessions.length > 0) {
+          const SessionModel = mongoose.model('Session');
+          await SessionModel.updateMany(
+            { _id: { $in: oldMembership.generatedSessions }, attendanceStatus: 'pending', startTime: { $gt: new Date() } },
+            { $set: { attendanceStatus: 'cancelled', notes: 'Cancelled due to plan upgrade' } },
+            { session }
+          );
+        }
+      }
+    }
 
     if (preferredDays && preferredSlots && preferredDays.length > 0) {
       const sessionIds = await generateMembershipSessions(primaryMembership, plan, session);
