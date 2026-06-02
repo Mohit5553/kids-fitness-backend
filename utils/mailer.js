@@ -16,6 +16,8 @@ const createTransporter = () => {
   });
 };
 
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
 const sendEmail = async ({ to, subject, html, text }) => {
   const transporter = createTransporter();
   if (!transporter) return false;
@@ -91,7 +93,7 @@ export async function sendWelcomeEmail(user) {
         <p>Thanks for joining the Kids Fitness family! We're thrilled to have you and your little explorers on board.</p>
         <p>You can now book classes, track progress, and manage your sessions directly from your dashboard.</p>
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard" style="${buttonStyles}">Go to My Dashboard</a>
+          <a href="${FRONTEND_URL}/dashboard" style="${buttonStyles}">Go to My Dashboard</a>
         </div>
         <p>If you have any questions, just reply to this email!</p>
         <p>Stay active,<br>The Kids Fitness Team</p>
@@ -137,7 +139,7 @@ export async function sendBookingConfirmationEmail(booking, classData, userData)
         </ul>
 
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">View All Bookings</a>
+          <a href="${FRONTEND_URL}/dashboard/bookings" style="${buttonStyles}">View All Bookings</a>
         </div>
         
         <p>Please arrive 10 minutes before the session starts.</p>
@@ -175,7 +177,7 @@ export async function sendBookingUpdateEmail(booking, status, userData) {
         <p>You can view the full details and manage your attendance in your dashboard.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">My Bookings</a>
+          <a href="${FRONTEND_URL}/dashboard/bookings" style="${buttonStyles}">My Bookings</a>
         </div>
       </div>
       <div style="${footerStyles}">
@@ -246,7 +248,7 @@ export async function sendMembershipUpdateEmail(membership, userData, planData) 
         <p>You can view your full membership details in your dashboard.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/membership" style="${buttonStyles}">My Membership</a>
+          <a href="${FRONTEND_URL}/dashboard/membership" style="${buttonStyles}">My Membership</a>
         </div>
       </div>
       <div style="${footerStyles}">
@@ -282,7 +284,7 @@ export async function sendPaymentConfirmationEmail(payment, userData, descriptio
         <p>Thank you for your payment. You can find your full transaction history in your dashboard.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/payments" style="${buttonStyles}">View Payment History</a>
+          <a href="${FRONTEND_URL}/dashboard/payments" style="${buttonStyles}">View Payment History</a>
         </div>
       </div>
       <div style="${footerStyles}">
@@ -311,7 +313,7 @@ export async function sendAccountUpdateEmail(user, type = 'profile') {
         <p>If you did not request this change, please contact our support team immediately.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard" style="${buttonStyles}">Go to My Dashboard</a>
+          <a href="${FRONTEND_URL}/dashboard" style="${buttonStyles}">Go to My Dashboard</a>
         </div>
       </div>
       <div style="${footerStyles}">
@@ -427,7 +429,7 @@ export async function sendSessionReminderEmail(bookingOrMembership, classData, s
         <p>We're looking forward to seeing you! Please try to arrive at least 10 minutes before the class starts.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/dashboard/bookings" style="${buttonStyles}">View Dashboard</a>
+          <a href="${FRONTEND_URL}/dashboard/bookings" style="${buttonStyles}">View Dashboard</a>
         </div>
         
         <p>If you have any questions or need to reschedule, please contact us.</p>
@@ -466,7 +468,7 @@ export async function sendTrainerSessionReminderEmail(session, classData, traine
         <p>Please ensure you are prepared for the session and arrive at least 15 minutes early.</p>
         
         <div style="text-align: center;">
-          <a href="${process.env.CORS_ORIGIN || 'http://localhost:5173'}/trainer/dashboard" style="${buttonStyles}">View Trainer Dashboard</a>
+          <a href="${FRONTEND_URL}/trainer/dashboard" style="${buttonStyles}">View Trainer Dashboard</a>
         </div>
         
         <p>If you have any issues or cannot attend, please contact management immediately.</p>

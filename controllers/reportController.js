@@ -586,6 +586,7 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
       const payments = await Payment.find({ ...filter, ...dateFilter, status: 'paid' })
         .populate('userId', 'name email')
         .populate('locationId', 'name')
+        .populate('bookingId', 'bookingNumber')
         .sort({ createdAt: -1 })
         .lean();
 
@@ -613,7 +614,8 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           source: p.paymentMethod,
           type: p.paymentType || 'Sales',
           customerName: p.userId?.name || 'Guest',
-          location: p.locationId?.name || 'N/A'
+          location: p.locationId?.name || 'N/A',
+          bookingNumber: p.bookingId?.bookingNumber || 'N/A'
         })),
         expenses: expenses.map(e => ({
           _id: e._id,
@@ -624,6 +626,32 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           location: e.locationId?.name || 'N/A'
         }))
       };
+      break;
+    }
+
+    case 'expenses': {
+      let expenseDateFilter = {};
+      if (sDate && eDate) {
+        expenseDateFilter.date = { $gte: sDate, $lte: eDate };
+      } else if (sDate) {
+        expenseDateFilter.date = { $gte: sDate };
+      } else if (eDate) {
+        expenseDateFilter.date = { $lte: eDate };
+      }
+
+      const expenses = await Expense.find({ ...filter, ...expenseDateFilter, isUat: req.isUat === true })
+        .populate('locationId', 'name')
+        .sort({ date: -1 })
+        .lean();
+
+      data = expenses.map(e => ({
+        _id: e._id,
+        date: e.date,
+        amount: e.amount,
+        category: e.category,
+        title: e.title,
+        location: e.locationId?.name || 'N/A'
+      }));
       break;
     }
 
