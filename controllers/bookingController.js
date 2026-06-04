@@ -894,3 +894,19 @@ export const sendReminder = asyncHandler(async (req, res) => {
   const sent = await sendSessionReminderEmail(booking, classData, sessionData, booking.userId || booking.guestDetails);
   res.json({ message: sent ? 'Reminder sent' : 'Failed to send' });
 });
+
+export const getBookingById = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id)
+    .populate('userId', 'name email phone')
+    .populate('processedBy', 'name email role')
+    .populate('classId', 'title price')
+    .populate('planId', 'name price validity')
+    .populate({ path: 'sessionId', populate: { path: 'trainerId', select: 'name' } })
+    .populate('participants.childId', 'name age gender')
+    .populate('locationId', 'name');
+  if (!booking) {
+    res.status(404);
+    throw new Error('Booking not found');
+  }
+  res.json(booking);
+});
