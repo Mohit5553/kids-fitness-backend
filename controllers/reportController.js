@@ -615,7 +615,9 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
           type: p.paymentType || 'Sales',
           customerName: p.userId?.name || 'Guest',
           location: p.locationId?.name || 'N/A',
-          bookingNumber: p.bookingId?.bookingNumber || 'N/A'
+          bookingNumber: p.bookingId?.bookingNumber || (p.groupId ? 'Group Booking' : 'N/A'),
+          bookingId: p.bookingId?._id || null,
+          groupId: p.groupId || null
         })),
         expenses: expenses.map(e => ({
           _id: e._id,

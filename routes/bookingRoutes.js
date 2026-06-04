@@ -10,7 +10,8 @@ import {
   lookupGuestBooking,
   createGroupBooking,
   sendReminder,
-  getBookingSchedule
+  getBookingSchedule,
+  getBookingById
 } from '../controllers/bookingController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 
@@ -23,6 +24,7 @@ router.post('/', optionalAuth, createBooking);
 router.put('/:id/status', protect, adminOnly, updateBookingStatus);
 router.post('/:id/refund-request', protect, requestRefund);
 router.get('/:id/schedule', protect, getBookingSchedule);
+router.get('/:id', protect, getBookingById);
 router.put('/:id/refund-resolve', protect, adminOnly, resolveRefundRequest);
 router.post('/:id/reminder', protect, adminOnly, sendReminder);
 router.post('/group', protect, createGroupBooking);
