@@ -26,7 +26,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     children // Array of child objects
   } = req.body;
 
-  const email = rawEmail?.trim();
+  const email = rawEmail?.trim().toLowerCase();
 
   if (!name || !email || !password) {
     res.status(400);
@@ -129,7 +129,7 @@ export const registerUser = asyncHandler(async (req, res) => {
 
 export const loginUser = asyncHandler(async (req, res) => {
   const { email: rawEmail, password } = req.body;
-  const email = rawEmail?.trim();
+  const email = rawEmail?.trim().toLowerCase();
   if (!email || !password) {
     res.status(400);
     throw new Error('Email and password are required');
@@ -214,7 +214,8 @@ export const getMe = asyncHandler(async (req, res) => {
 });
 
 export const forgotPassword = asyncHandler(async (req, res) => {
-  const user = await User.findOne(withUAT(req, { email: req.body.email }));
+  const email = req.body.email?.trim().toLowerCase();
+  const user = await User.findOne(withUAT(req, { email }));
 
   if (!user) {
     // For security, don't reveal if user exists. Just say "If an account exists..."

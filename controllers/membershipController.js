@@ -429,6 +429,23 @@ export const createMembership = asyncHandler(async (req, res) => {
   let baseClasses = plan.classesIncluded ?? (plan.type === 'dropin' ? 1 : 0);
   let classesRemaining = isInfinite ? -1 : baseClasses * membershipUnits;
 
+  // Handle 'same' bonus classes by simply adding them to the primary membership
+  if (plan.bonusQuantity > 0 && plan.bonusItemType === 'same') {
+    if (classesRemaining !== -1) {
+      classesRemaining += (plan.bonusQuantity * membershipUnits);
+    }
+  }
+  // Handle new bonuses array
+  if (plan.bonuses && plan.bonuses.length > 0) {
+    plan.bonuses.forEach(b => {
+      if (b.quantity > 0 && b.itemType === 'same') {
+        if (classesRemaining !== -1) {
+          classesRemaining += (b.quantity * membershipUnits);
+        }
+      }
+    });
+  }
+
   // Credits initialization
   let creditsRemaining = (plan.type === 'credit-based' && plan.creditsIncluded)
     ? plan.creditsIncluded * membershipUnits
@@ -563,6 +580,87 @@ export const createMembership = asyncHandler(async (req, res) => {
       const sessionIds = await generateMembershipSessions(primaryMembership, plan, session);
       primaryMembership.generatedSessions = sessionIds;
       await primaryMembership.save({ session });
+    }
+
+    // BONUS LOGIC: If bonusItemType is 'class' or 'plan', create a secondary free membership
+    let bonusMembershipIds = [];
+    if (plan.bonusQuantity > 0 && (plan.bonusItemType === 'plan' || plan.bonusItemType === 'class') && plan.bonusItemId) {
+      const isBonusPlan = plan.bonusItemType === 'plan';
+      const bonusPlanId = isBonusPlan ? plan.bonusItemId : plan._id; // If class, membership still needs a planId reference
+      
+      const [bonusMembership] = await Membership.create([{
+        userId: targetUserId,
+        planId: bonusPlanId,
+        startDate,
+        endDate: finalEndDate,
+        autoRenew: false,
+        classesRemaining: plan.bonusQuantity * membershipUnits,
+        childId,
+        preferredDays,
+        preferredSlots,
+        sessionsPerWeek,
+        paymentId,
+        locationId: plan.locationId || resolveReadLocationId(req),
+        notes: `Bonus sessions from ${plan.name}`,
+        isUAT: req.isUAT || false
+      }], { session });
+
+      bonusMembershipIds.push(bonusMembership._id);
+
+      if (preferredDays && preferredSlots && preferredDays.length > 0) {
+        let bonusTargetPlan = plan;
+        if (isBonusPlan) {
+           const actualPlan = await Plan.findById(plan.bonusItemId).session(session);
+           if (actualPlan) bonusTargetPlan = actualPlan;
+        } else {
+           // For class bonus, we trick the generator into using the specific class ID
+           bonusTargetPlan = { ...plan.toObject(), _id: plan.bonusItemId };
+        }
+        const bonusSessionIds = await generateMembershipSessions(bonusMembership, bonusTargetPlan, session);
+        bonusMembership.generatedSessions = bonusSessionIds;
+        await bonusMembership.save({ session });
+      }
+    }
+
+    if (plan.bonuses && plan.bonuses.length > 0) {
+      for (const b of plan.bonuses) {
+        if (b.quantity > 0 && (b.itemType === 'plan' || b.itemType === 'class') && b.itemId) {
+          const isBonusPlan = b.itemType === 'plan';
+          const bonusPlanId = isBonusPlan ? b.itemId : plan._id;
+          
+          const [bonusMembership] = await Membership.create([{
+            userId: targetUserId,
+            planId: bonusPlanId,
+            startDate,
+            endDate: finalEndDate,
+            autoRenew: false,
+            classesRemaining: b.quantity * membershipUnits,
+            childId,
+            preferredDays,
+            preferredSlots,
+            sessionsPerWeek,
+            paymentId,
+            locationId: plan.locationId || resolveReadLocationId(req),
+            notes: `Bonus sessions from ${plan.name}`,
+            isUAT: req.isUAT || false
+          }], { session });
+
+          bonusMembershipIds.push(bonusMembership._id);
+
+          if (preferredDays && preferredSlots && preferredDays.length > 0) {
+            let bonusTargetPlan = plan;
+            if (isBonusPlan) {
+               const actualPlan = await Plan.findById(b.itemId).session(session);
+               if (actualPlan) bonusTargetPlan = actualPlan;
+            } else {
+               bonusTargetPlan = { ...plan.toObject(), _id: b.itemId };
+            }
+            const bonusSessionIds = await generateMembershipSessions(bonusMembership, bonusTargetPlan, session);
+            bonusMembership.generatedSessions = bonusSessionIds;
+            await bonusMembership.save({ session });
+          }
+        }
+      }
     }
 
     let payRec = null;
@@ -718,6 +816,10 @@ export const createMembership = asyncHandler(async (req, res) => {
 
     if (bogoMembershipId) {
       await Membership.findByIdAndUpdate(bogoMembershipId, { bookingId: bookingRec._id }, { session });
+    }
+    
+    for (const bId of bonusMembershipIds) {
+      await Membership.findByIdAndUpdate(bId, { bookingId: bookingRec._id }, { session });
     }
 
     const invoiceNumber = await getNextInvoiceNumber();
