@@ -32,7 +32,7 @@ export const getUsers = asyncHandler(async (req, res) => {
   // Show all users regardless of branch selection in management view
   const filter = {};
 
-  const users = await User.find(withUAT(req, filter))
+  const users = await User.find(withUAT(req, filter, true))
     .populate('locationIds', 'name')
     .select('-password')
     .sort({ createdAt: -1 });
@@ -40,7 +40,7 @@ export const getUsers = asyncHandler(async (req, res) => {
 });
 
 export const getUserById = asyncHandler(async (req, res) => {
-  const user = await User.findOne(withUAT(req, { _id: req.params.id })).select('-password');
+  const user = await User.findOne(withUAT(req, { _id: req.params.id }, true)).select('-password');
   if (!user) {
     res.status(404);
     throw new Error('User not found');
@@ -123,7 +123,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
 export const createStaff = asyncHandler(async (req, res) => {
   const { name, email, password, role, phone, locationIds, allowUAT } = req.body;
 
-  const userExists = await User.findOne(withUAT(req, { email }));
+  const userExists = await User.findOne(withUAT(req, { email }, true));
   if (userExists) {
     res.status(400);
     throw new Error('User already exists');
@@ -155,7 +155,7 @@ export const createStaff = asyncHandler(async (req, res) => {
 });
 
 export const getUserChildren = asyncHandler(async (req, res) => {
-  const children = await Child.find(withUAT(req, { parentId: req.params.id }));
+  const children = await Child.find(withUAT(req, { parentId: req.params.id }, true));
   res.json(children);
 });
 
@@ -175,13 +175,13 @@ export const lookupUser = asyncHandler(async (req, res) => {
       { phone: regex },
       { name: regex }
     ]
-  })).select('-password');
+  }, true)).select('-password');
 
   if (!user) {
     return res.status(404).json({ message: 'User not found' });
   }
 
-  const children = await Child.find(withUAT(req, { parentId: user._id }));
+  const children = await Child.find(withUAT(req, { parentId: user._id }, true));
   res.json({ user, children });
 });
 
@@ -196,9 +196,9 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
 
   let user;
   if (email) {
-    user = await User.findOne(withUAT(req, { email: new RegExp(`^${email}$`, 'i') }));
+    user = await User.findOne(withUAT(req, { email: new RegExp(`^${email}$`, 'i') }, true));
   } else if (phone) {
-    user = await User.findOne(withUAT(req, { phone }));
+    user = await User.findOne(withUAT(req, { phone }, true));
   }
 
   if (!user) {
@@ -244,7 +244,7 @@ export const createWalkingCustomer = asyncHandler(async (req, res) => {
     }
   }
 
-  const allChildren = await Child.find(withUAT(req, { parentId: user._id }));
+  const allChildren = await Child.find(withUAT(req, { parentId: user._id }, true));
 
   res.status(201).json({
     user: {
@@ -268,7 +268,7 @@ export const suggestUsers = asyncHandler(async (req, res) => {
     role: { $in: ['parent', 'customer'] },
     status: 'active',
     $or: [{ name: regex }, { email: regex }, { phone: regex }]
-  }))
+  }, true))
     .select('_id name email phone role')
     .limit(8)
     .lean();

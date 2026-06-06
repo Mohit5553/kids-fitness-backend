@@ -32,9 +32,42 @@ export const getPlans = asyncHandler(async (req, res) => {
     endDate: { $gte: now }
   })).lean();
 
-  // Attach promotions to each plan
+  // Fetch names for bonuses
+  const allPlans = await Plan.find({}, 'name').lean();
+  const ClassModel = mongoose.models.Class;
+  const allClasses = ClassModel ? await ClassModel.find({}, 'title').lean() : [];
+
+  const getBonusName = (type, id) => {
+    if (!id) return '';
+    if (type === 'plan') {
+      const p = allPlans.find(x => x._id.toString() === id.toString());
+      return p ? p.name : 'Specific Plan';
+    } else if (type === 'class') {
+      const c = allClasses.find(x => x._id.toString() === id.toString());
+      return c ? c.title : 'Specific Class';
+    }
+    return '';
+  };
+
+  // Attach promotions and bonus names to each plan
   const plansWithPromos = plans.map(p => {
     const planObj = p.toObject();
+    
+    // Resolve old bonus structure name
+    if (planObj.bonusItemType !== 'same' && planObj.bonusItemId) {
+      planObj.bonusItemName = getBonusName(planObj.bonusItemType, planObj.bonusItemId);
+    }
+    
+    // Resolve array bonuses names
+    if (planObj.bonuses && planObj.bonuses.length > 0) {
+      planObj.bonuses = planObj.bonuses.map(b => {
+        if (b.itemType !== 'same' && b.itemId) {
+          b.itemName = getBonusName(b.itemType, b.itemId);
+        }
+        return b;
+      });
+    }
+
     planObj.activePromotions = activePromos.filter(promo => {
         // Global promotion for this location?
         if (promo.applicableLocations && promo.applicableLocations.length > 0) {
@@ -65,6 +98,7 @@ export const createPlan = asyncHandler(async (req, res) => {
     validity, validityValue, validityUnit,
     billingCycle, tagline, isFeatured, sessionType, 
     validDays, gender, timeSlots, trainerAllocation, trainerId, extensionRules,
+    bonusQuantity, bonusItemType, bonusItemId, bonuses,
     replicateToLocations
   } = req.body;
 
@@ -102,6 +136,7 @@ export const createPlan = asyncHandler(async (req, res) => {
     durationWeeks: finalDurationWeeks, durationValue, durationUnit,
     billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
     trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId,
+    bonusQuantity, bonusItemType, bonusItemId, bonuses,
     isUAT: req.isUAT || false
   });
 
@@ -116,6 +151,7 @@ export const createPlan = asyncHandler(async (req, res) => {
           durationWeeks: finalDurationWeeks, durationValue, durationUnit,
           billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
           trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId: locId,
+          bonusQuantity, bonusItemType, bonusItemId, bonuses,
           isUAT: req.isUAT || false
         });
       });
@@ -211,6 +247,10 @@ export const updatePlan = asyncHandler(async (req, res) => {
           trainerAllocation: plan.trainerAllocation,
           trainerId: plan.trainerId,
           extensionRules: plan.extensionRules,
+          bonusQuantity: plan.bonusQuantity,
+          bonusItemType: plan.bonusItemType,
+          bonusItemId: plan.bonusItemId,
+          bonuses: plan.bonuses,
           taxId: plan.taxId,
           locationId: locId,
           isUAT: plan.isUAT || false,

@@ -77,12 +77,18 @@ export const promoteToLive = asyncHandler(async (req, res) => {
     return res.json({ message: 'Item is already in Live mode', item });
   }
 
-  item.isUAT = false;
-  await item.save();
+  // Clone the item to Live instead of moving it
+  const itemObj = item.toObject();
+  delete itemObj._id;
+  delete itemObj.createdAt;
+  delete itemObj.updatedAt;
+  itemObj.isUAT = false;
+
+  const newItem = await model.create(itemObj);
 
   res.json({
-    message: `${type} promoted to Live environment successfully`,
-    item
+    message: `${type} promoted (copied) to Live environment successfully`,
+    item: newItem
   });
 });
 

@@ -108,7 +108,7 @@ export const getSessions = asyncHandler(async (req, res) => {
   }
 
   const sessions = await Session.find(filter)
-    .populate({ path: 'classId', select: 'title name ageGroup duration price minAge maxAge' })
+    .populate({ path: 'classId', select: 'title name ageGroup duration price minAge maxAge categoryId' })
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
     .sort({ startTime: 1 });
@@ -204,7 +204,7 @@ export const getSessionById = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { _id: req.params.id, locationId } : { _id: req.params.id };
   const session = await Session.findOne(filter)
-    .populate('classId', 'title ageGroup duration price minAge maxAge')
+    .populate('classId', 'title ageGroup duration price minAge maxAge categoryId')
     .populate('trainerId', 'name')
     .populate('locationId', 'name')
     .populate({ path: 'membershipId', populate: { path: 'childId', select: 'name' } });

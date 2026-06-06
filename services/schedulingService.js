@@ -89,6 +89,7 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                         classId: plan._id,
                         startTime: sessionDate,
                         status: 'scheduled',
+                        isUAT: membership.isUAT || false,
                         $and: [
                             {
                                 $or: [
@@ -155,7 +156,8 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
                             endTime: new Date(sessionDate.getTime() + 60 * 60 * 1000), // Default 1 hour
                             locationId: effectiveLocationId,
                             bookedParticipants: 1, // Start with 1 for the first person
-                            status: 'scheduled'
+                            status: 'scheduled',
+                            isUAT: membership.isUAT || false
                         };
 
                         // Assign fixed trainer if specified in the plan

@@ -17,6 +17,7 @@ const classSchema = new mongoose.Schema(
     taxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tax' },
     creditCost: { type: Number, default: 1 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category' },
     isUAT: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }

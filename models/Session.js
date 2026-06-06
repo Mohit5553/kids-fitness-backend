@@ -17,7 +17,7 @@ const sessionSchema = new mongoose.Schema(
     cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     cancelledAt: { type: Date },
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
-    attendanceStatus: { type: String, enum: ['booked', 'present', 'absent'], default: 'booked' },
+    attendanceStatus: { type: String, enum: ['booked', 'pending', 'present', 'absent', 'cancelled'], default: 'booked' },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location' },
     isManual: { type: Boolean, default: false },
     trainerReminderSent: { type: Boolean, default: false },

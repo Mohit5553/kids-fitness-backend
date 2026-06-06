@@ -14,7 +14,11 @@ export const uatDetector = asyncHandler(async (req, res, next) => {
  * Helper to inject isUAT filter into Mongoose queries.
  * Use this in controllers: Session.find(withUAT(req, { ...otherFilters }))
  */
-export const withUAT = (req, filter = {}) => {
+export const withUAT = (req, filter = {}, allowLiveInUAT = false) => {
+  if (req.isUAT && allowLiveInUAT) {
+    return filter;
+  }
+
   const uatFilter = req.isUAT 
     ? { isUAT: true } 
     : { $or: [{ isUAT: false }, { isUAT: { $exists: false } }] };

@@ -44,6 +44,7 @@ import taxRoutes from './routes/taxRoutes.js';
 import couponRoutes from './routes/couponRoutes.js';
 import leadRoutes from './routes/leadRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
+import categoryRoutes from './routes/categoryRoutes.js';
 import uatRoutes from './routes/uatRoutes.js';
 import { initCronJobs } from './utils/cronJobs.js';
 
@@ -122,6 +123,7 @@ app.use('/api/taxes', taxRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/categories', categoryRoutes);
 app.use('/api/uat', uatRoutes);
 
 app.use(notFound);
