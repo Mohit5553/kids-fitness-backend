@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import Location from '../models/Location.js';
 import ClassModel from '../models/Class.js';
 import Session from '../models/Session.js';
+import Plan from '../models/Plan.js';
 import { resolveReadLocationId } from '../utils/locationScope.js';
 
 export const getLocations = asyncHandler(async (req, res) => {
@@ -19,10 +20,11 @@ export const getLocations = asyncHandler(async (req, res) => {
       
       activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id?.toString()).filter(Boolean))];
     } else {
-      // Find locations that have either classes assigned or sessions scheduled (general)
+      // Find locations that have either classes assigned, sessions scheduled, or active plans
       const classLocations = await ClassModel.distinct('locationId');
       const sessionLocations = await Session.distinct('locationId');
-      activeLocationIds = [...new Set([...classLocations, ...sessionLocations].map(id => id?.toString()).filter(Boolean))];
+      const planLocations = await Plan.distinct('locationId', { status: 'active' });
+      activeLocationIds = [...new Set([...classLocations, ...sessionLocations, ...planLocations].map(id => id?.toString()).filter(Boolean))];
     }
     
     query._id = { $in: activeLocationIds };

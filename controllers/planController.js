@@ -141,10 +141,13 @@ export const createPlan = asyncHandler(async (req, res) => {
   });
 
   if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
-    const replicationPromises = replicateToLocations
-      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== locationId?.toString())
-      .map(async (locId) => {
-        return Plan.create({ 
+    const locationsToReplicate = replicateToLocations
+      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== locationId?.toString());
+      
+    for (const locId of locationsToReplicate) {
+      const existing = await Plan.findOne({ name: created.name, locationId: locId, isUAT: created.isUAT || false });
+      
+      const planData = {
           name, price, 
           validity: finalValidity, validityValue, validityUnit,
           benefits, type, classesIncluded, 
@@ -153,9 +156,16 @@ export const createPlan = asyncHandler(async (req, res) => {
           trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId: locId,
           bonusQuantity, bonusItemType, bonusItemId, bonuses,
           isUAT: req.isUAT || false
-        });
-      });
-    await Promise.all(replicationPromises);
+      };
+
+      if (!existing) {
+        await Plan.create(planData);
+      } else {
+        Object.assign(existing, planData);
+        existing.locationId = locId; // ensure location remains correct
+        await existing.save();
+      }
+    }
   }
 
   res.status(201).json(created);
@@ -222,10 +232,13 @@ export const updatePlan = asyncHandler(async (req, res) => {
   }
 
   if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
-    const replicationPromises = replicateToLocations
-      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== plan.locationId?.toString())
-      .map(async (locId) => {
-        return Plan.create({ 
+    const locationsToReplicate = replicateToLocations
+      .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== plan.locationId?.toString());
+      
+    for (const locId of locationsToReplicate) {
+      const existing = await Plan.findOne({ name: plan.name, locationId: locId, isUAT: plan.isUAT || false });
+      
+      const planData = {
           name: plan.name,
           price: plan.price, 
           validity: plan.validity,
@@ -255,9 +268,16 @@ export const updatePlan = asyncHandler(async (req, res) => {
           locationId: locId,
           isUAT: plan.isUAT || false,
           status: plan.status || 'active'
-        });
-      });
-    await Promise.all(replicationPromises);
+      };
+
+      if (!existing) {
+        await Plan.create(planData);
+      } else {
+        Object.assign(existing, planData);
+        existing.locationId = locId; // ensure location remains correct
+        await existing.save();
+      }
+    }
   }
 
   res.json(saved);

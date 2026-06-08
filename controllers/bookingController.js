@@ -688,6 +688,29 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
       }
     }
   }
+
+  // Create attendance record if marked as attended
+  if (status === 'attended' && booking.sessionId) {
+    const attendees = booking.participants?.length ? booking.participants : [{ childId: null, name: booking.guestDetails?.name || 'Self' }];
+    for (const p of attendees) {
+      await Attendance.findOneAndUpdate(
+        { bookingId: booking._id, sessionId: booking.sessionId, childId: p.childId || null },
+        {
+          bookingId: booking._id,
+          sessionId: booking.sessionId,
+          childId: p.childId || null,
+          userId: booking.userId,
+          participantName: p.name || booking.userId?.name,
+          status: 'present',
+          method: 'manual',
+          checkedInAt: new Date(),
+          locationId: booking.locationId
+        },
+        { upsert: true }
+      );
+    }
+  }
+
   const saved = await booking.save();
 
   // EMIT: Notify admin room (including trainers/cashiers) that a booking has been updated
@@ -788,9 +811,14 @@ export const linkUserBookings = async (user) => {
 };
 
 export const createGroupBooking = asyncHandler(async (req, res) => {
-  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName: providedCorporateName, paymentMethod, promotionId, discountAmount, couponCode, couponAmount } = req.body;
+  const { participants, sessionIds, sessions, classId: providedClassId, locationId: providedLocationId, corporateName, paymentMethod, promotionId, discountAmount, couponCode, couponAmount, guestDetails } = req.body;
   const resolvedSessionIds = sessionIds || sessions;
   if (!participants?.length || !resolvedSessionIds?.length) throw new Error('Missing details');
+
+  if (!req.user && (!guestDetails || !guestDetails.name || !guestDetails.email)) {
+    res.status(400);
+    throw new Error('Must be logged in or provide guest details');
+  }
 
   let classId = providedClassId;
   let locationId = providedLocationId;
@@ -800,23 +828,30 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     locationId = providedLocationId || s1?.locationId;
   }
   const classItem = await ClassModel.findById(classId);
+  if (!classItem) throw new Error('Class not found');
+
   const groupBookingId = `GRP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const bookings = [];
   let totalAmount = 0;
 
   const count = resolvedSessionIds.length * participants.length;
+  const rawBaseAmount = (classItem.price || 0) * count;
+  
   const dDisc = (discountAmount || 0) / count;
   const dCoup = (couponAmount || 0) / count;
   const activeTax = await Tax.findOne({ locationId, status: 'active' });
-  const singleNet = Math.max(0, classItem.price - dDisc - dCoup);
+  const singleNet = Math.max(0, (classItem.price || 0) - dDisc - dCoup);
   const singleTax = activeTax ? calculateTax(singleNet, activeTax) : 0;
   const singleTotal = activeTax?.calculationMethod === 'inclusive' ? singleNet : singleNet + singleTax;
 
   for (const sessionId of resolvedSessionIds) {
     const sess = await Session.findById(sessionId);
     for (const p of participants) {
+      const bookingNumber = `BK-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
       const b = await Booking.create({
-        userId: req.body.userId || req.user._id,
+        bookingNumber,
+        userId: req.user ? (req.body.userId || req.user._id) : undefined,
+        guestDetails: !req.user ? guestDetails : undefined,
         classId,
         sessionId,
         locationId,
@@ -825,13 +860,23 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
         totalAmount: singleTotal,
         taxAmount: singleTax,
         groupId: groupBookingId,
-        bookingType: 'session', // Default to session for group/walking bookings
+        corporateName,
+        bookingType: 'session',
         status: paymentMethod === 'online' ? 'confirmed' : 'pending',
-        paymentStatus: paymentMethod === 'online' ? 'completed' : 'pending'
+        paymentStatus: paymentMethod === 'online' ? 'completed' : 'pending',
+        paymentMethod: paymentMethod || 'center',
+        promotionId,
+        discountAmount: dDisc,
+        couponCode,
+        couponAmount: dCoup
       });
       bookings.push(b);
       totalAmount += singleTotal;
     }
+    
+    // Increment session booked participants
+    sess.bookedParticipants += participants.length;
+    await sess.save();
   }
 
   // COUPON REDEMPTION LOGIC
@@ -850,8 +895,44 @@ export const createGroupBooking = asyncHandler(async (req, res) => {
     }
   }
 
-  await Payment.create({ userId: req.body.userId || req.user._id, amount: totalAmount, groupId: groupBookingId, status: paymentMethod === 'online' ? 'paid' : 'pending', locationId });
-  res.status(201).json({ groupBookingId, bookingCount: bookings.length, totalAmount });
+  // CREATE SINGLE UNIFIED INVOICE FOR THE GROUP
+  if (bookings.length > 0) {
+    const { getNextInvoiceNumber } = await import('../services/schedulingService.js').catch(() => ({ getNextInvoiceNumber: async () => `INV-${Date.now()}` }));
+    let getInvoiceNum;
+    try {
+      const module = await import('../services/schedulingService.js');
+      getInvoiceNum = module.getNextInvoiceNumber || (async () => `INV-${Date.now()}`);
+    } catch(e) {
+      getInvoiceNum = async () => `INV-${Date.now()}`;
+    }
+    const invoiceNumber = await getInvoiceNum();
+    
+    const invoiceItems = [{ description: `${classItem.title} - Group Booking`, quantity: count, unitPrice: classItem.price || 0, total: rawBaseAmount }];
+    if (discountAmount > 0) invoiceItems.push({ description: 'Promotion Discount', quantity: 1, unitPrice: -discountAmount, total: -discountAmount });
+    if (couponAmount > 0) invoiceItems.push({ description: `Cash Voucher Applied (${couponCode})`, quantity: 1, unitPrice: -couponAmount, total: -couponAmount });
+
+    await mongoose.model('Invoice').create({
+      invoiceNumber,
+      bookingId: bookings[0]._id, // Link unified invoice to the FIRST booking in the group
+      userId: req.user ? (req.body.userId || req.user._id) : undefined,
+      guestDetails: !req.user ? guestDetails : undefined,
+      amount: totalAmount,
+      grossAmount: rawBaseAmount,
+      totalAmount: totalAmount,
+      status: paymentMethod === 'online' ? 'paid' : 'unpaid',
+      locationId,
+      items: invoiceItems,
+      taxAmount: singleTax * count,
+      discountAmount: discountAmount || 0,
+      couponAmount: couponAmount || 0,
+      couponCode: couponCode
+    });
+  }
+
+  await Payment.create({ userId: req.user ? (req.body.userId || req.user._id) : undefined, guestDetails: !req.user ? guestDetails : undefined, amount: totalAmount, groupId: groupBookingId, status: paymentMethod === 'online' ? 'paid' : 'pending', locationId });
+  
+  // Return the bookings array along with group info
+  res.status(201).json({ groupBookingId, bookingCount: bookings.length, totalAmount, bookings });
 });
 
 export const sendReminder = asyncHandler(async (req, res) => {

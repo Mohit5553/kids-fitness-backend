@@ -4,7 +4,7 @@ import { notifyAdmins } from '../utils/socketUtils.js';
 import { resolveReadLocationId, resolveWriteLocationId } from '../utils/locationScope.js';
 
 export const createLead = asyncHandler(async (req, res) => {
-  const { name, email, phone, message, locationId: bodyLocationId } = req.body;
+  const { name, email, phone, message, locationId: bodyLocationId, interestedClassId, interestedPlanId } = req.body;
   
   if (!name || !email || !message) {
     res.status(400);
@@ -18,7 +18,9 @@ export const createLead = asyncHandler(async (req, res) => {
     email,
     phone,
     message,
-    locationId
+    locationId,
+    interestedClassId: interestedClassId || null,
+    interestedPlanId: interestedPlanId || null
   });
 
   notifyAdmins(req, 'new_lead', { leadId: created._id });
@@ -29,7 +31,10 @@ export const createLead = asyncHandler(async (req, res) => {
 export const getLeads = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
-  const leads = await Lead.find(filter).sort({ createdAt: -1 });
+  const leads = await Lead.find(filter)
+    .populate('interestedClassId', 'title')
+    .populate('interestedPlanId', 'name')
+    .sort({ createdAt: -1 });
   res.json(leads);
 });
 
