@@ -102,8 +102,28 @@ export const createClass = asyncHandler(async (req, res) => {
     imageUrl,
     creditCost: creditCost || 1,
     locationId,
-    isUAT: req.isUAT || false
+    isUAT: req.isUAT || false,
+    categoryId: req.body.categoryId,
+    taxId: req.body.taxId,
+    status: req.body.status || 'active',
+    minAge: req.body.minAge,
+    maxAge: req.body.maxAge,
+    color: req.body.color
   });
+
+  if (req.body.replicateToLocations && Array.isArray(req.body.replicateToLocations)) {
+    const locationsToReplicate = req.body.replicateToLocations.filter(id => id !== locationId.toString());
+    for (const locId of locationsToReplicate) {
+      if (mongoose.Types.ObjectId.isValid(locId)) {
+        await ClassModel.create({
+          ...created.toObject(),
+          _id: new mongoose.Types.ObjectId(),
+          locationId: locId
+        });
+      }
+    }
+  }
+
   res.status(201).json(created);
 });
 
@@ -135,6 +155,30 @@ export const updateClass = asyncHandler(async (req, res) => {
 
   Object.assign(classItem, req.body);
   const saved = await classItem.save();
+
+  if (req.body.replicateToLocations && Array.isArray(req.body.replicateToLocations)) {
+    const locationsToReplicate = req.body.replicateToLocations.filter(id => id !== classItem.locationId?.toString());
+    for (const locId of locationsToReplicate) {
+      if (mongoose.Types.ObjectId.isValid(locId)) {
+        // Check if a class with the same title already exists in that location to avoid duplicates
+        const existing = await ClassModel.findOne({ title: saved.title, locationId: locId, isUAT: req.isUAT || false });
+        if (!existing) {
+          const newClassObj = saved.toObject();
+          delete newClassObj._id;
+          delete newClassObj.createdAt;
+          delete newClassObj.updatedAt;
+          newClassObj.locationId = locId;
+          await ClassModel.create(newClassObj);
+        } else {
+          // If it exists, update it to match the current edits
+          Object.assign(existing, req.body);
+          existing.locationId = locId; // ensure location remains correct
+          await existing.save();
+        }
+      }
+    }
+  }
+
   res.json(saved);
 });
 

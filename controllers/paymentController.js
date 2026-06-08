@@ -334,15 +334,30 @@ export const createBookingPayment = asyncHandler(async (req, res) => {
     couponAmount: effectiveCouponAmount
   });
 
-  booking.status = 'confirmed';
-  booking.paymentStatus = 'completed';
-  booking.paymentReference = reference;
-  booking.paymentId = created._id;
-  booking.paymentDate = new Date();
-  booking.discountAmount = effectiveDiscount;
-  booking.couponAmount = effectiveCouponAmount;
-  booking.couponCode = effectiveCouponCode;
-  await booking.save();
+  // If part of a group, update ALL bookings in the group
+  if (booking.groupId) {
+    const groupBookings = await Booking.find({ groupId: booking.groupId });
+    for (const gb of groupBookings) {
+      gb.status = 'confirmed';
+      gb.paymentStatus = 'completed';
+      gb.paymentReference = reference;
+      gb.paymentId = created._id;
+      gb.paymentDate = new Date();
+      // Only set discount on first one to avoid double counting, or distribute it. 
+      // It's already calculated properly per booking on creation, so we don't strictly need to override here.
+      await gb.save();
+    }
+  } else {
+    booking.status = 'confirmed';
+    booking.paymentStatus = 'completed';
+    booking.paymentReference = reference;
+    booking.paymentId = created._id;
+    booking.paymentDate = new Date();
+    booking.discountAmount = effectiveDiscount;
+    booking.couponAmount = effectiveCouponAmount;
+    booking.couponCode = effectiveCouponCode;
+    await booking.save();
+  }
 
   // Sync Invoice Status: Mark official invoice as paid
   const invoiceRec = await Invoice.findOne({ bookingId: booking._id });

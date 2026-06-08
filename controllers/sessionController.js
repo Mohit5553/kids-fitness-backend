@@ -136,20 +136,59 @@ export const getSessions = asyncHandler(async (req, res) => {
       const attendeeBookingIds = attendances.map(a => a.bookingId?.toString()).filter(Boolean);
 
       let totalOccupancy = 0;
+      let attendedCount = 0;
+      let unpaidCount = 0;
+      let trainerVerified = false;
+
       if (session.classType === 'Class') {
-        // For classes, merge scheduled bookings and manual attendances
-        const scheduledBookingIds = await Booking.find({ sessionId: session._id, status: { $ne: 'cancelled' } }).distinct('_id');
-        const uniqueBookings = new Set([...scheduledBookingIds.map(id => id.toString()), ...attendeeBookingIds]);
-        totalOccupancy = uniqueBookings.size;
+        // For classes, count actual participants across bookings
+        const scheduledBookings = await Booking.find({ sessionId: session._id, status: { $ne: 'cancelled' } });
+        let participantCount = 0;
+        const bookingIds = new Set();
+        
+        scheduledBookings.forEach(b => {
+          const numParticipants = (b.participants?.length || 1);
+          participantCount += numParticipants;
+          bookingIds.add(b._id.toString());
+          
+          if (b.status === 'attended') {
+             trainerVerified = true;
+          }
+          if (['attended', 'completed'].includes(b.status)) {
+             attendedCount += numParticipants;
+          }
+          if (b.paymentStatus === 'pending') {
+             unpaidCount += numParticipants;
+          }
+        });
+
+        // Add any manual attendances that don't have an associated scheduled booking
+        attendances.forEach(a => {
+          if (!a.bookingId || !bookingIds.has(a.bookingId.toString())) {
+             participantCount += 1;
+             if (['present', 'late'].includes(a.status)) attendedCount += 1;
+          }
+        });
+
+        totalOccupancy = participantCount;
       } else {
         // For memberships, merge scheduled memberships and manual attendances
         const scheduledMembershipIds = memberships.map(m => m._id.toString());
         const uniqueMemberships = new Set([...scheduledMembershipIds, ...attendeeMembershipIds]);
         totalOccupancy = uniqueMemberships.size;
+        
+        // Memberships are prepaid, so unpaidCount is 0. 
+        // For attended count, we check attendances:
+        attendances.forEach(a => {
+          if (['present', 'late'].includes(a.status)) attendedCount += 1;
+        });
       }
 
       const sessionObj = session.toObject();
       sessionObj.bookedParticipants = totalOccupancy;
+      sessionObj.attendedParticipants = attendedCount;
+      sessionObj.unpaidParticipants = unpaidCount;
+      sessionObj.trainerVerified = trainerVerified || sessionObj.status === 'completed';
 
       // Backward compatibility: old flows may have unassigned sessions stuck in "rejected".
       // Keep these claimable until a trainer explicitly accepts.
@@ -222,11 +261,13 @@ export const getSessionById = asyncHandler(async (req, res) => {
     throw new Error('Not authorized to view this private session');
   }
 
-  // Add live bookedParticipants count
-  const totalBookings = await Booking.countDocuments({
+  // Add live bookedParticipants count by summing participants
+  const allBookings = await Booking.find({
     sessionId: session._id,
     status: { $ne: 'cancelled' }
   });
+  
+  const totalBookings = allBookings.reduce((sum, b) => sum + (b.participants?.length || 1), 0);
 
   const sessionObj = session.toObject();
   sessionObj.bookedParticipants = totalBookings;

@@ -23,6 +23,9 @@ export const getMyAttendance = asyncHandler(async (req, res) => {
 export const getAllAttendance = asyncHandler(async (req, res) => {
   const locationId = resolveReadLocationId(req);
   const filter = locationId ? { locationId } : {};
+  if (req.query.sessionId) {
+    filter.sessionId = req.query.sessionId;
+  }
   const attendance = await Attendance.find(withUAT(req, filter))
     .populate('userId', 'name email')
     .populate('childId', 'name age')
