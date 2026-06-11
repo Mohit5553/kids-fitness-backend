@@ -392,6 +392,10 @@ export const createMembership = asyncHandler(async (req, res) => {
 
   // Handle automatic scaling if not explicitly provided (e.g. from older clients or direct API)
   const totalWeeklySpots = preferredDays.length * (preferredSlots?.length || 1);
+  if (plan.sessionsPerWeek > 0 && preferredDays.length > plan.sessionsPerWeek) {
+    res.status(400);
+    throw new Error(`You can only select up to ${plan.sessionsPerWeek} training days per week for this plan.`);
+  }
   const planCapacity = plan.classesIncluded || 1;
   const membershipUnits = reqUnits || Math.max(1, Math.ceil(totalWeeklySpots / planCapacity));
 
@@ -550,7 +554,7 @@ export const createMembership = asyncHandler(async (req, res) => {
       childId,
       preferredDays,
       preferredSlots,
-      sessionsPerWeek,
+      sessionsPerWeek: (sessionsPerWeek !== undefined && sessionsPerWeek !== '') ? sessionsPerWeek : (plan.sessionsPerWeek || 0),
       paymentId,
       locationId: plan.locationId || resolveReadLocationId(req),
       membershipUnits,
@@ -598,7 +602,7 @@ export const createMembership = asyncHandler(async (req, res) => {
         childId,
         preferredDays,
         preferredSlots,
-        sessionsPerWeek,
+        sessionsPerWeek: (sessionsPerWeek !== undefined && sessionsPerWeek !== '') ? sessionsPerWeek : (plan.sessionsPerWeek || 0),
         paymentId,
         locationId: plan.locationId || resolveReadLocationId(req),
         notes: `Bonus sessions from ${plan.name}`,
@@ -638,7 +642,7 @@ export const createMembership = asyncHandler(async (req, res) => {
             childId,
             preferredDays,
             preferredSlots,
-            sessionsPerWeek,
+            sessionsPerWeek: (sessionsPerWeek !== undefined && sessionsPerWeek !== '') ? sessionsPerWeek : (plan.sessionsPerWeek || 0),
             paymentId,
             locationId: plan.locationId || resolveReadLocationId(req),
             notes: `Bonus sessions from ${plan.name}`,
@@ -710,7 +714,7 @@ export const createMembership = asyncHandler(async (req, res) => {
         childId: finalBogoChildId,
         preferredDays,
         preferredSlots,
-        sessionsPerWeek,
+        sessionsPerWeek: (sessionsPerWeek !== undefined && sessionsPerWeek !== '') ? sessionsPerWeek : (plan.sessionsPerWeek || 0),
         paymentId,
         locationId: plan.locationId,
         isBogoFree: true,

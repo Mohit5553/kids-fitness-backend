@@ -10,15 +10,15 @@ import { withUAT } from '../middleware/uatMiddleware.js';
 export const getPlans = asyncHandler(async (req, res) => {
   const { locationId: queryLocationId, all } = req.query;
   const locationId = queryLocationId || resolveReadLocationId(req);
-  
+
   // Show plans for the specific location OR global plans (locationId: null)
   let filter = (locationId && locationId !== 'all') ? { $or: [{ locationId }, { locationId: null }] } : {};
-  
+
   // If not 'all=true' (public view), only show active plans
   if (all !== 'true') {
     filter.status = 'active';
   }
-  
+
   const plans = await Plan.find(withUAT(req, filter))
     .populate('locationId', 'name')
     .populate('trainerId', 'name avatarUrl')
@@ -52,12 +52,12 @@ export const getPlans = asyncHandler(async (req, res) => {
   // Attach promotions and bonus names to each plan
   const plansWithPromos = plans.map(p => {
     const planObj = p.toObject();
-    
+
     // Resolve old bonus structure name
     if (planObj.bonusItemType !== 'same' && planObj.bonusItemId) {
       planObj.bonusItemName = getBonusName(planObj.bonusItemType, planObj.bonusItemId);
     }
-    
+
     // Resolve array bonuses names
     if (planObj.bonuses && planObj.bonuses.length > 0) {
       planObj.bonuses = planObj.bonuses.map(b => {
@@ -69,21 +69,21 @@ export const getPlans = asyncHandler(async (req, res) => {
     }
 
     planObj.activePromotions = activePromos.filter(promo => {
-        // Global promotion for this location?
-        if (promo.applicableLocations && promo.applicableLocations.length > 0) {
-            // If the plan is location-specific, check if the promo applies to that location
-            if (planObj.locationId && !promo.applicableLocations.some(locId => locId.toString() === (planObj.locationId._id || planObj.locationId).toString())) {
-                return false;
-            }
+      // Global promotion for this location?
+      if (promo.applicableLocations && promo.applicableLocations.length > 0) {
+        // If the plan is location-specific, check if the promo applies to that location
+        if (planObj.locationId && !promo.applicableLocations.some(locId => locId.toString() === (planObj.locationId._id || planObj.locationId).toString())) {
+          return false;
         }
+      }
 
-        // Specific plan promotion?
-        const hasItemConstraint = (promo.applicableClasses && promo.applicableClasses.length > 0) || 
-                                 (promo.applicablePlans && promo.applicablePlans.length > 0);
-        
-        if (!hasItemConstraint) return true; // General location/global promo
+      // Specific plan promotion?
+      const hasItemConstraint = (promo.applicableClasses && promo.applicableClasses.length > 0) ||
+        (promo.applicablePlans && promo.applicablePlans.length > 0);
 
-        return promo.applicablePlans?.some(id => id.toString() === planObj._id.toString());
+      if (!hasItemConstraint) return true; // General location/global promo
+
+      return promo.applicablePlans?.some(id => id.toString() === planObj._id.toString());
     });
     return planObj;
   });
@@ -92,14 +92,14 @@ export const getPlans = asyncHandler(async (req, res) => {
 });
 
 export const createPlan = asyncHandler(async (req, res) => {
-  const { 
-    name, price, benefits, type, classesIncluded, 
+  const {
+    name, price, benefits, type, classesIncluded,
     durationWeeks, durationValue, durationUnit,
     validity, validityValue, validityUnit,
-    billingCycle, tagline, isFeatured, sessionType, 
+    billingCycle, tagline, isFeatured, sessionType,
     validDays, gender, timeSlots, trainerAllocation, trainerId, extensionRules,
     bonusQuantity, bonusItemType, bonusItemId, bonuses,
-    replicateToLocations
+    replicateToLocations, sessionsPerWeek, taxId, categoryId, dailyBookingLimit, creditsIncluded
   } = req.body;
 
   if (!name || price == null) {
@@ -129,33 +129,35 @@ export const createPlan = asyncHandler(async (req, res) => {
 
   const finalTrainerId = (trainerAllocation === 'fixed' && trainerId) ? trainerId : null;
 
-  const created = await Plan.create({ 
-    name, price, 
+  const created = await Plan.create({
+    name, price,
     validity: finalValidity, validityValue, validityUnit,
-    benefits, type, classesIncluded, 
+    benefits, type, classesIncluded,
     durationWeeks: finalDurationWeeks, durationValue, durationUnit,
-    billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
+    billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots,
     trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId,
     bonusQuantity, bonusItemType, bonusItemId, bonuses,
+    sessionsPerWeek, taxId, categoryId, dailyBookingLimit, creditsIncluded,
     isUAT: req.isUAT || false
   });
 
   if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
     const locationsToReplicate = replicateToLocations
       .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== locationId?.toString());
-      
+
     for (const locId of locationsToReplicate) {
       const existing = await Plan.findOne({ name: created.name, locationId: locId, isUAT: created.isUAT || false });
-      
+
       const planData = {
-          name, price, 
-          validity: finalValidity, validityValue, validityUnit,
-          benefits, type, classesIncluded, 
-          durationWeeks: finalDurationWeeks, durationValue, durationUnit,
-          billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots, 
-          trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId: locId,
-          bonusQuantity, bonusItemType, bonusItemId, bonuses,
-          isUAT: req.isUAT || false
+        name, price,
+        validity: finalValidity, validityValue, validityUnit,
+        benefits, type, classesIncluded,
+        durationWeeks: finalDurationWeeks, durationValue, durationUnit,
+        billingCycle, tagline, isFeatured, sessionType, validDays, gender, timeSlots,
+        trainerAllocation, trainerId: finalTrainerId, extensionRules, locationId: locId,
+        bonusQuantity, bonusItemType, bonusItemId, bonuses,
+        sessionsPerWeek, taxId, categoryId, dailyBookingLimit, creditsIncluded,
+        isUAT: req.isUAT || false
       };
 
       if (!existing) {
@@ -171,6 +173,8 @@ export const createPlan = asyncHandler(async (req, res) => {
   res.status(201).json(created);
 });
 
+import fs from 'fs';
+
 export const updatePlan = asyncHandler(async (req, res) => {
   const plan = await Plan.findById(req.params.id);
   if (!plan) {
@@ -185,6 +189,8 @@ export const updatePlan = asyncHandler(async (req, res) => {
 
   const oldTrainerId = plan.trainerId?.toString();
   const updates = { ...req.body };
+  console.log("=== UPDATE PLAN REQ BODY ===", req.body);
+  fs.appendFileSync('d:/jts/kids fitness/kids-fitness-backend/req_body_log.txt', JSON.stringify(req.body) + '\n');
   if (updates.locationId === 'all') updates.locationId = null;
 
   const { replicateToLocations } = req.body;
@@ -204,13 +210,30 @@ export const updatePlan = asyncHandler(async (req, res) => {
 
   const trainerChanged = updates.trainerId && updates.trainerId.toString() !== oldTrainerId;
 
-  Object.assign(plan, updates);
+  plan.set(updates);
+  if (updates.sessionsPerWeek !== undefined) {
+    plan.sessionsPerWeek = updates.sessionsPerWeek;
+  }
+  if (updates.dailyBookingLimit !== undefined) {
+    plan.dailyBookingLimit = Number(updates.dailyBookingLimit);
+  }
   const saved = await plan.save();
+
+  // Sync the sessionsPerWeek and dailyBookingLimit limits to all location-wise variations of this plan
+  if (updates.sessionsPerWeek !== undefined || updates.dailyBookingLimit !== undefined) {
+    await Plan.updateMany(
+      { name: plan.name },
+      {
+        sessionsPerWeek: plan.sessionsPerWeek,
+        dailyBookingLimit: plan.dailyBookingLimit
+      }
+    );
+  }
 
   // If trainer was updated, sync to memberships and upcoming sessions
   if (trainerChanged && updates.trainerAllocation === 'fixed') {
     console.log(`[Plan Sync] Propagating trainer change for plan ${plan.name} to all active records...`);
-    
+
     // 1. Update active memberships
     await Membership.updateMany(
       { planId: plan._id, status: 'active' },
@@ -219,12 +242,12 @@ export const updatePlan = asyncHandler(async (req, res) => {
 
     // 2. Update upcoming sessions
     await Session.updateMany(
-      { 
-        classId: plan._id, 
+      {
+        classId: plan._id,
         classType: 'Plan',
-        startTime: { $gte: new Date() } 
+        startTime: { $gte: new Date() }
       },
-      { 
+      {
         trainerId: updates.trainerId,
         trainerStatus: 'accepted'
       }
@@ -234,40 +257,44 @@ export const updatePlan = asyncHandler(async (req, res) => {
   if (Array.isArray(replicateToLocations) && replicateToLocations.length > 0) {
     const locationsToReplicate = replicateToLocations
       .filter(locId => locId && mongoose.Types.ObjectId.isValid(locId) && locId.toString() !== plan.locationId?.toString());
-      
+
     for (const locId of locationsToReplicate) {
       const existing = await Plan.findOne({ name: plan.name, locationId: locId, isUAT: plan.isUAT || false });
-      
+
       const planData = {
-          name: plan.name,
-          price: plan.price, 
-          validity: plan.validity,
-          validityValue: plan.validityValue,
-          validityUnit: plan.validityUnit,
-          benefits: plan.benefits,
-          type: plan.type,
-          classesIncluded: plan.classesIncluded, 
-          durationWeeks: plan.durationWeeks,
-          durationValue: plan.durationValue,
-          durationUnit: plan.durationUnit,
-          billingCycle: plan.billingCycle,
-          tagline: plan.tagline,
-          isFeatured: plan.isFeatured,
-          sessionType: plan.sessionType,
-          validDays: plan.validDays,
-          gender: plan.gender,
-          timeSlots: plan.timeSlots, 
-          trainerAllocation: plan.trainerAllocation,
-          trainerId: plan.trainerId,
-          extensionRules: plan.extensionRules,
-          bonusQuantity: plan.bonusQuantity,
-          bonusItemType: plan.bonusItemType,
-          bonusItemId: plan.bonusItemId,
-          bonuses: plan.bonuses,
-          taxId: plan.taxId,
-          locationId: locId,
-          isUAT: plan.isUAT || false,
-          status: plan.status || 'active'
+        name: plan.name,
+        price: plan.price,
+        validity: plan.validity,
+        validityValue: plan.validityValue,
+        validityUnit: plan.validityUnit,
+        benefits: plan.benefits,
+        type: plan.type,
+        classesIncluded: plan.classesIncluded,
+        durationWeeks: plan.durationWeeks,
+        durationValue: plan.durationValue,
+        durationUnit: plan.durationUnit,
+        billingCycle: plan.billingCycle,
+        tagline: plan.tagline,
+        isFeatured: plan.isFeatured,
+        sessionType: plan.sessionType,
+        validDays: plan.validDays,
+        gender: plan.gender,
+        timeSlots: plan.timeSlots,
+        trainerAllocation: plan.trainerAllocation,
+        trainerId: plan.trainerId,
+        extensionRules: plan.extensionRules,
+        bonusQuantity: plan.bonusQuantity,
+        bonusItemType: plan.bonusItemType,
+        bonusItemId: plan.bonusItemId,
+        bonuses: plan.bonuses,
+        taxId: plan.taxId,
+        categoryId: plan.categoryId,
+        dailyBookingLimit: plan.dailyBookingLimit,
+        sessionsPerWeek: plan.sessionsPerWeek,
+        creditsIncluded: plan.creditsIncluded,
+        locationId: locId,
+        isUAT: plan.isUAT || false,
+        status: plan.status || 'active'
       };
 
       if (!existing) {
