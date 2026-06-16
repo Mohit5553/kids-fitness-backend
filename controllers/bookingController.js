@@ -6,7 +6,7 @@ import Session from '../models/Session.js';
 import ClassModel from '../models/Class.js';
 import SalesOrder from '../models/SalesOrder.js';
 import Location from '../models/Location.js';
-import { resolveReadLocationId } from '../utils/locationScope.js';
+import { resolveReadLocationId, resolveReadLocationIds } from '../utils/locationScope.js';
 import { sendBookingConfirmationEmail, sendBookingUpdateEmail, sendSessionReminderEmail } from '../utils/mailer.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
@@ -87,9 +87,9 @@ export const getAllBookings = asyncHandler(async (req, res) => {
   if (childId) filter['participants.childId'] = childId;
 
   if (!isDirectLookup) {
-    const locationId = resolveReadLocationId(req);
-    if (locationId && locationId !== 'all') {
-      filter.$or = [{ locationId }, { locationId: null }];
+    const locationIds = resolveReadLocationIds(req);
+    if (locationIds && locationIds.length > 0) {
+      filter.$or = [{ locationId: { $in: locationIds } }, { locationId: null }];
     }
   }
 

@@ -55,7 +55,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     throw new Error('User not found');
   }
 
-  const { name, email, phone, role, locationIds, allowUAT } = req.body;
+  const { name, email, phone, role, locationIds, allowUAT, canManageShifts } = req.body;
 
   if (email && email !== user.email) {
     const existing = await User.findOne({ email });
@@ -70,6 +70,7 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (phone !== undefined) user.phone = phone;
   if (role) user.role = role;
   if (allowUAT !== undefined) user.allowUAT = allowUAT;
+  if (canManageShifts !== undefined) user.canManageShifts = canManageShifts;
 
   if (req.user?.role === 'superadmin' && locationIds !== undefined) {
     user.locationIds = locationIds || [];
@@ -88,7 +89,8 @@ export const updateUser = asyncHandler(async (req, res) => {
     phone: saved.phone,
     role: saved.role,
     locationIds: saved.locationIds,
-    allowUAT: saved.allowUAT
+    allowUAT: saved.allowUAT,
+    canManageShifts: saved.canManageShifts
   });
 });
 
@@ -121,7 +123,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
-  const { name, email, password, role, phone, locationIds, allowUAT } = req.body;
+  const { name, email, password, role, phone, locationIds, allowUAT, canManageShifts } = req.body;
 
   const userExists = await User.findOne(withUAT(req, { email }, true));
   if (userExists) {
@@ -140,7 +142,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     phone,
     locationIds: locationIds || (req.user.locationIds && req.user.locationIds.length > 0 ? [req.user.locationIds[0]] : []),
     isUAT: req.isUAT || false,
-    allowUAT: allowUAT || false
+    allowUAT: allowUAT || false,
+    canManageShifts: canManageShifts || false
   });
 
   await syncTrainerProfile(user).catch(err => console.error('Trainer sync failed:', err.message));
@@ -150,7 +153,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     name: user.name,
     email: user.email,
     role: user.role,
-    allowUAT: user.allowUAT
+    allowUAT: user.allowUAT,
+    canManageShifts: user.canManageShifts
   });
 });
 

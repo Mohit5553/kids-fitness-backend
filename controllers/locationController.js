@@ -8,6 +8,23 @@ import { resolveReadLocationId } from '../utils/locationScope.js';
 export const getLocations = asyncHandler(async (req, res) => {
   const query = req.query.all === 'true' ? {} : { status: 'active' };
 
+  if (req.user && ['admin', 'trainer'].includes(req.user.role)) {
+    const allowedIds = [];
+    if (req.user.locationIds && req.user.locationIds.length > 0) {
+      allowedIds.push(...req.user.locationIds.map(id => id.toString()));
+    }
+    if (req.user.locationId) {
+      if (!allowedIds.includes(req.user.locationId.toString())) {
+        allowedIds.push(req.user.locationId.toString());
+      }
+    }
+    if (allowedIds.length > 0) {
+      query._id = { $in: allowedIds };
+    } else {
+      query._id = '000000000000000000000000'; // Return no locations if none are assigned
+    }
+  }
+
   if (req.query.activeClasses === 'true') {
     const { classId } = req.query;
     let activeLocationIds;

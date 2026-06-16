@@ -46,6 +46,8 @@ import leadRoutes from './routes/leadRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
 import uatRoutes from './routes/uatRoutes.js';
+import reviewRoutes from './routes/reviewRoutes.js';
+import shiftRoutes from './routes/shiftRoutes.js';
 import { initCronJobs } from './utils/cronJobs.js';
 
 const app = express();
@@ -125,6 +127,8 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/uat', uatRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/shifts', shiftRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
