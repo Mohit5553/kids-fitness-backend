@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import ClassModel from '../models/Class.js';
 import Trainer from '../models/Trainer.js';
 import Session from '../models/Session.js';
@@ -14,13 +15,17 @@ import Invoice from '../models/Invoice.js';
 import Lead from '../models/Lead.js';
 import ExtensionRequest from '../models/ExtensionRequest.js';
 import Expense from '../models/Expense.js';
-import { resolveReadLocationId } from '../utils/locationScope.js';
+import { resolveReadLocationId, resolveReadLocationIds } from '../utils/locationScope.js';
 import { withUAT } from '../middleware/uatMiddleware.js';
 
 export const getSummary = asyncHandler(async (req, res) => {
   const now = new Date();
   const locationId = resolveReadLocationId(req);
-  const locationFilter = locationId ? { locationId } : {};
+  const locationFilter = locationId && locationId !== '000000000000000000000000' && mongoose.Types.ObjectId.isValid(locationId) 
+    ? { locationId: new mongoose.Types.ObjectId(locationId) } 
+    : (locationId ? { locationId } : {});
+
+  const strLocationFilter = locationId ? { locationId } : {};
 
   // Fetch fresh user to get latest seenAt timestamps
   const currentUser = await User.findById(req.user._id).select('seenAt').lean();
@@ -41,22 +46,22 @@ export const getSummary = asyncHandler(async (req, res) => {
     pendingPayments,
     pendingBookings
   ] = await Promise.all([
-    ClassModel.countDocuments(withUAT(req, locationFilter)),
-    Trainer.countDocuments(withUAT(req, locationFilter)),
-    Session.countDocuments(withUAT(req, { ...locationFilter, status: { $ne: 'cancelled' }, startTime: { $gte: now } })),
+    ClassModel.countDocuments(withUAT(req, strLocationFilter)),
+    Trainer.countDocuments(withUAT(req, strLocationFilter)),
+    Session.countDocuments(withUAT(req, { ...strLocationFilter, status: { $ne: 'cancelled' }, startTime: { $gte: now } })),
     Booking.aggregate([
-      { $match: withUAT(req, locationId ? { locationId } : {}) },
+      { $match: withUAT(req, locationFilter) },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]),
-    User.countDocuments(withUAT(req, locationFilter)),
-    User.countDocuments(withUAT(req, { ...locationFilter, role: { $in: ['admin', 'superadmin'] } })),
-    Membership.countDocuments(withUAT(req, { ...locationFilter, status: 'active' })),
+    User.countDocuments(withUAT(req, strLocationFilter)),
+    User.countDocuments(withUAT(req, { ...strLocationFilter, role: { $in: ['admin', 'superadmin'] } })),
+    Membership.countDocuments(withUAT(req, { ...strLocationFilter, status: 'active' })),
     Payment.aggregate([
-      { $match: withUAT(req, locationId ? { locationId } : {}) },
+      { $match: withUAT(req, locationFilter) },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
     Trial.countDocuments(withUAT(req, {
-      ...locationFilter,
+      ...strLocationFilter,
       status: 'pending',
       ...(sa.trials ? { createdAt: { $gt: sa.trials } } : {})
     })),
@@ -146,12 +151,23 @@ export const getDetailedReport = asyncHandler(async (req, res) => {
   const { startDate, endDate, locationId: queryLocationId, all } = req.query;
 
   const filter = {};
-  // If 'all' is true, we don't apply location filter. 
-  // If queryLocationId is provided, we use it.
-  // Otherwise, we use the default resolveReadLocationId (which might restrict to one branch).
-  if (all !== 'true') {
-    const locationId = queryLocationId || resolveReadLocationId(req);
-    if (locationId) filter.locationId = locationId;
+  
+  // Always enforce location access control
+  const allowedLocationIds = resolveReadLocationIds(req);
+  
+  if (all !== 'true' && queryLocationId) {
+    if (allowedLocationIds && !allowedLocationIds.includes(queryLocationId) && queryLocationId !== '000000000000000000000000') {
+       filter.locationId = '000000000000000000000000'; // user requested a location they don't have access to
+    } else {
+       filter.locationId = queryLocationId;
+    }
+  } else {
+    // If 'all' is true, or no queryLocationId is provided, fallback to all allowed locations
+    if (allowedLocationIds && allowedLocationIds.length > 0) {
+       filter.locationId = { $in: allowedLocationIds };
+    } else if (req.user?.role !== 'superadmin') {
+       filter.locationId = '000000000000000000000000';
+    }
   }
 
   const dateFilter = {};

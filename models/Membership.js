@@ -21,7 +21,7 @@ const membershipSchema = new mongoose.Schema(
     childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child' },
     preferredDays: [{ type: String }],
     preferredSlots: [{ type: String }],
-    sessionsPerWeek: { type: Number, default: 3 },
+    sessionsPerWeek: { type: mongoose.Schema.Types.Mixed, default: 3 },
     generatedSessions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Session' }],
     paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },

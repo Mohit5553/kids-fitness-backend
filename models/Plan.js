@@ -18,6 +18,7 @@ const planSchema = new mongoose.Schema(
       itemId: { type: mongoose.Schema.Types.ObjectId }
     }],
     dailyBookingLimit: { type: Number, default: 0 }, // 0 = unlimited bookings per day
+    sessionsPerWeek: { type: mongoose.Schema.Types.Mixed, default: 0 }, // 0 = no weekly restriction, can be text
     durationWeeks: { type: Number },
     durationValue: { type: Number },
     durationUnit: { type: String, enum: ['days', 'weeks', 'months'], default: 'weeks' },

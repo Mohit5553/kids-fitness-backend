@@ -1,23 +1,55 @@
 export const resolveReadLocationId = (req) => {
-  if (req.locationId) return req.locationId;
-  if (req.user?.locationIds && req.user.locationIds.length > 0) {
-    return req.user.locationIds[0];
+  const isSuperadmin = req.user?.role === 'superadmin';
+
+  if (isSuperadmin) {
+    return req.locationId ? req.locationId.toString() : null;
   }
-  return req.user?.locationId || null;
+
+  const allowedIds = [];
+  if (req.user?.locationIds && req.user.locationIds.length > 0) {
+    allowedIds.push(...req.user.locationIds.map(id => id.toString()));
+  }
+  if (req.user?.locationId) {
+    if (!allowedIds.includes(req.user.locationId.toString())) {
+      allowedIds.push(req.user.locationId.toString());
+    }
+  }
+
+  // If a specific location is requested, check if allowed
+  if (req.locationId && allowedIds.includes(req.locationId.toString())) {
+    return req.locationId.toString();
+  }
+
+  // If no specific location requested, or requested one is not allowed, return their first allowed location
+  return allowedIds.length > 0 ? allowedIds[0] : '000000000000000000000000';
 };
 
 export const resolveReadLocationIds = (req) => {
-  if (req.locationId) return [req.locationId];
-  const ids = [];
+  const isSuperadmin = req.user?.role === 'superadmin';
+
+  const allowedIds = [];
   if (req.user?.locationIds && req.user.locationIds.length > 0) {
-    ids.push(...req.user.locationIds);
+    allowedIds.push(...req.user.locationIds.map(id => id.toString()));
   }
   if (req.user?.locationId) {
-    if (!ids.includes(req.user.locationId.toString())) {
-      ids.push(req.user.locationId);
+    if (!allowedIds.includes(req.user.locationId.toString())) {
+      allowedIds.push(req.user.locationId.toString());
     }
   }
-  return ids.length > 0 ? ids : null;
+
+  if (isSuperadmin) {
+    return req.locationId ? [req.locationId.toString()] : null;
+  }
+
+  if (req.locationId) {
+    if (allowedIds.includes(req.locationId.toString())) {
+      return [req.locationId.toString()];
+    } else {
+      return ['000000000000000000000000']; // Not authorized for this location
+    }
+  }
+
+  return allowedIds.length > 0 ? allowedIds : ['000000000000000000000000'];
 };
 
 export const resolveWriteLocationId = (req) => {

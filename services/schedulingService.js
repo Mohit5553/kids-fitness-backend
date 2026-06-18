@@ -38,14 +38,34 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
     // Loop until we reach the end date or the max sessions count
     const normalizedEndDate = new Date(endDate);
 
+    let currentWeekStart = new Date(currentDate);
+    currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay()); // Sunday
+    currentWeekStart.setHours(0, 0, 0, 0);
+    let currentWeekKey = currentWeekStart.getTime();
+    let sessionsThisWeek = 0;
+
     while (currentDate <= normalizedEndDate && sessionsCreated < maxSessions) {
+        let loopWeekStart = new Date(currentDate);
+        loopWeekStart.setDate(loopWeekStart.getDate() - loopWeekStart.getDay());
+        loopWeekStart.setHours(0, 0, 0, 0);
+        let loopWeekKey = loopWeekStart.getTime();
+
+        if (loopWeekKey !== currentWeekKey) {
+            currentWeekKey = loopWeekKey;
+            sessionsThisWeek = 0;
+        }
+
         const dayOfWeek = currentDate.getDay();
 
         if (targetDays.includes(dayOfWeek)) {
-            // For each preferred slot on this day, try to create ONE session
-            let sessionCreatedForToday = false;
-            for (const slot of finalSlots) {
-                if (sessionsCreated >= maxSessions || sessionCreatedForToday) break;
+            // Check weekly limit
+            if (sessionsPerWeek > 0 && sessionsThisWeek >= sessionsPerWeek) {
+                // Skip creating sessions if weekly limit is reached
+            } else {
+                // For each preferred slot on this day, try to create ONE session
+                let sessionCreatedForToday = false;
+                for (const slot of finalSlots) {
+                    if (sessionsCreated >= maxSessions || sessionCreatedForToday) break;
 
                 // Use regex for robust extraction: handles "10Am", "9:00am", "10:30 PM", etc.
                 const timeMatch = slot.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?$/i);
@@ -180,8 +200,10 @@ export const generateMembershipSessions = async (membership, plan, dbSession = n
 
                     sessions.push(targetSessionId);
                     sessionsCreated++;
+                    sessionsThisWeek++;
                     sessionCreatedForToday = true;
                 }
+            }
             }
         }
 

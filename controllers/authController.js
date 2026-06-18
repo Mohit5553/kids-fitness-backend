@@ -123,6 +123,7 @@ export const registerUser = asyncHandler(async (req, res) => {
     trainerId,
     permissions,
     allowUAT: user.allowUAT,
+    canManageShifts: user.canManageShifts,
     token: generateToken(user._id)
   });
 });
@@ -185,6 +186,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     trainerId,
     permissions,
     allowUAT: user.allowUAT,
+    canManageShifts: user.canManageShifts,
     token: generateToken(user._id)
   });
 });
