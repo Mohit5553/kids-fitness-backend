@@ -10,6 +10,7 @@ const paymentSchema = new mongoose.Schema(
     membershipId: { type: mongoose.Schema.Types.ObjectId, ref: 'Membership' },
     amount: { type: Number, required: true },
     paymentMethod: { type: String, default: 'card' },
+    cardBrand: { type: String },
     status: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
     reference: { type: String },
     last4: { type: String },
